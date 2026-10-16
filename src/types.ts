@@ -1,0 +1,77 @@
+export type TransactionType = 'despesa' | 'receita' | 'poupanca';
+export type PaymentMethod = 'Pix/Débito' | 'Cartão de Crédito' | 'Dinheiro';
+export type ActiveTab = 'home' | 'extrato' | 'metas' | 'graficos';
+
+export interface Transaction {
+  id: string;
+  tipo: TransactionType;
+  valor: number;
+  data: string; // YYYY-MM-DD
+  local: string;
+  categoria: string;
+  tags: string[];
+  metodoPagamento: PaymentMethod;
+  parcelaInfo?: string;
+  responsavel: string;
+  pendenteSync?: boolean;
+}
+
+export interface CategoryBudget {
+  categoria: string;
+  limite: number;
+}
+
+export const CATEGORIAS_DESPESA = [
+  'Comida',
+  'Lazer',
+  'Transporte',
+  'Contas Fixas',
+  'Casa/Casamento',
+  'Compras',
+  'Saúde',
+  'Outros',
+];
+
+export const CATEGORIAS_RECEITA = ['Salário', 'Freelance', 'Rendimentos', 'Outros'];
+
+export const CATEGORIAS_POUPANCA = [
+  'Reserva do Casal',
+  'Casamento / Casa',
+  'Investimentos',
+  'Meta Individual',
+];
+
+export const ORCAMENTOS_INICIAIS: CategoryBudget[] = [
+  { categoria: 'Comida', limite: 800 },
+  { categoria: 'Lazer', limite: 450 },
+  { categoria: 'Casa/Casamento', limite: 600 },
+  { categoria: 'Transporte', limite: 300 },
+  { categoria: 'Contas Fixas', limite: 700 },
+];
+
+// --- FUNÇÕES UTILITÁRIAS E DE DATA (FUSO BRASIL) ---
+export const obterDataHojeLocal = () => {
+  const hoje = new Date();
+  const ano = hoje.getFullYear();
+  const mes = String(hoje.getMonth() + 1).padStart(2, '0');
+  const dia = String(hoje.getDate()).padStart(2, '0');
+  return `${ano}-${mes}-${dia}`;
+};
+
+export const obterMesAtualLocal = () => obterDataHojeLocal().slice(0, 7);
+
+export const formatarMoeda = (valor: number) =>
+  valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+export const formatarDataBR = (dataISO: string) => {
+  const partes = dataISO.split('-');
+  if (partes.length !== 3) return dataISO;
+  return `${partes[2]}/${partes[1]}/${partes[0]}`;
+};
+
+export const nomeMesAno = (anoMes: string) => {
+  const [ano, mes] = anoMes.split('-').map(Number);
+  const data = new Date(ano, mes - 1, 1);
+  const nome = data.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  return nome.charAt(0).toUpperCase() + nome.slice(1);
+};

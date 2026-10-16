@@ -1,0 +1,286 @@
+import React, { useState, useEffect } from 'react';
+import { X, Users, User } from 'lucide-react';
+import {
+  type TransactionType,
+  type PaymentMethod,
+  CATEGORIAS_DESPESA,
+  CATEGORIAS_RECEITA,
+  CATEGORIAS_POUPANCA,
+  obterDataHojeLocal,
+} from '../types';
+
+interface ModalTransacaoProps {
+  aberto: boolean;
+  onFechar: () => void;
+  pessoa1: string;
+  pessoa2: string;
+  salvando: boolean;
+  onSalvar: (dados: {
+    tipo: TransactionType;
+    responsavel: string;
+    valor: number;
+    data: string;
+    local: string;
+    categoria: string;
+    tags: string[];
+    metodoPagamento: PaymentMethod;
+    parcelas: number;
+  }) => Promise<void>;
+}
+
+export function ModalTransacao({
+  aberto,
+  onFechar,
+  pessoa1,
+  pessoa2,
+  salvando,
+  onSalvar,
+}: ModalTransacaoProps) {
+  const [tipo, setTipo] = useState<TransactionType>('despesa');
+  const [responsavel, setResponsavel] = useState<string>(pessoa1);
+  const [valor, setValor] = useState('');
+  const [local, setLocal] = useState('');
+  const [data, setData] = useState(() => obterDataHojeLocal());
+  const [categoria, setCategoria] = useState(CATEGORIAS_DESPESA[0]);
+  const [tags, setTags] = useState('');
+  const [metodoPagamento, setMetodoPagamento] = useState<PaymentMethod>('Pix/Débito');
+  const [parcelas, setParcelas] = useState(1);
+
+  useEffect(() => {
+    if (aberto) {
+      setData(obterDataHojeLocal());
+    }
+  }, [aberto]);
+
+  useEffect(() => {
+    if (tipo === 'despesa') setCategoria(CATEGORIAS_DESPESA[0]);
+    if (tipo === 'receita') setCategoria(CATEGORIAS_RECEITA[0]);
+    if (tipo === 'poupanca') setCategoria(CATEGORIAS_POUPANCA[0]);
+  }, [tipo]);
+
+  useEffect(() => {
+    if (responsavel !== pessoa1 && responsavel !== pessoa2 && responsavel !== 'Casal') {
+      setResponsavel(pessoa1);
+    }
+  }, [pessoa1, pessoa2, responsavel]);
+
+  if (!aberto) return null;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (salvando) return;
+
+    const valorLimpo = valor.includes(',')
+      ? valor.replace(/\./g, '').replace(',', '.')
+      : valor;
+    const valorNumerico = parseFloat(valorLimpo);
+
+    if (isNaN(valorNumerico) || valorNumerico <= 0 || !local.trim()) {
+      alert('Preencha um valor válido e a descrição do lançamento.');
+      return;
+    }
+
+    const listaTags = tags
+      .split(',')
+      .map((tag) => tag.trim())
+      .filter(Boolean)
+      .map((tag) => (tag.startsWith('#') ? tag : `#${tag}`));
+
+    await onSalvar({
+      tipo,
+      responsavel,
+      valor: valorNumerico,
+      data,
+      local: local.trim(),
+      categoria,
+      tags: listaTags,
+      metodoPagamento,
+      parcelas,
+    });
+
+    setValor('');
+    setLocal('');
+    setTags('');
+    setParcelas(1);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div className="bg-zinc-900 border border-zinc-800 w-full max-w-lg rounded-t-3xl sm:rounded-2xl p-5 md:p-6 space-y-4 shadow-2xl">
+        <div className="flex items-center justify-between">
+          <h3 className="font-bold text-base md:text-lg text-white">Novo Lançamento</h3>
+          <button
+            onClick={onFechar}
+            className="p-1.5 rounded-full bg-zinc-800 text-zinc-400 hover:text-white transition"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* TIPO */}
+        <div className="grid grid-cols-3 gap-2 bg-zinc-950 p-1 rounded-xl border border-zinc-800">
+          <button
+            type="button"
+            onClick={() => setTipo('despesa')}
+            className={`py-2 rounded-lg text-xs md:text-sm font-bold transition ${
+              tipo === 'despesa' ? 'bg-rose-500 text-white' : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            Gastei
+          </button>
+          <button
+            type="button"
+            onClick={() => setTipo('receita')}
+            className={`py-2 rounded-lg text-xs md:text-sm font-bold transition ${
+              tipo === 'receita'
+                ? 'bg-emerald-500 text-zinc-950'
+                : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            Recebi
+          </button>
+          <button
+            type="button"
+            onClick={() => setTipo('poupanca')}
+            className={`py-2 rounded-lg text-xs md:text-sm font-bold transition ${
+              tipo === 'poupanca'
+                ? 'bg-sky-500 text-zinc-950'
+                : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            Guardei
+          </button>
+        </div>
+
+        {/* RESPONSÁVEL */}
+        <div>
+          <label className="text-xs text-zinc-400 font-medium">De quem é esse registro?</label>
+          <div className="grid grid-cols-3 gap-2 mt-1.5">
+            {[pessoa1, pessoa2, 'Casal'].map((resp) => (
+              <button
+                type="button"
+                key={resp}
+                onClick={() => setResponsavel(resp)}
+                className={`py-2 px-3 rounded-xl text-xs md:text-sm font-bold border transition flex items-center justify-center gap-1.5 ${
+                  responsavel === resp
+                    ? 'bg-zinc-100 text-zinc-950 border-white'
+                    : 'bg-zinc-950 text-zinc-400 border-zinc-800 hover:border-zinc-700'
+                }`}
+              >
+                {resp === 'Casal' ? <Users size={14} /> : <User size={14} />}
+                <span className="truncate">{resp}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-3.5">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-zinc-400 font-medium">Valor (R$)</label>
+              <input
+                type="text"
+                inputMode="decimal"
+                required
+                placeholder="Ex: 45,90"
+                value={valor}
+                onChange={(e) => setValor(e.target.value)}
+                className="w-full mt-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-sm font-bold text-white focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-zinc-400 font-medium">Data</label>
+              <input
+                type="date"
+                required
+                value={data}
+                onChange={(e) => setData(e.target.value)}
+                className="w-full mt-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs text-zinc-400 font-medium">Onde foi / Descrição</label>
+            <input
+              type="text"
+              required
+              placeholder="Ex: Supermercado, iFood, Salário..."
+              value={local}
+              onChange={(e) => setLocal(e.target.value)}
+              className="w-full mt-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-zinc-400 font-medium">Categoria</label>
+              <select
+                value={categoria}
+                onChange={(e) => setCategoria(e.target.value)}
+                className="w-full mt-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500"
+              >
+                {(tipo === 'despesa'
+                  ? CATEGORIAS_DESPESA
+                  : tipo === 'receita'
+                  ? CATEGORIAS_RECEITA
+                  : CATEGORIAS_POUPANCA
+                ).map((cat) => (
+                  <option key={cat} value={cat}>
+                    {cat}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs text-zinc-400 font-medium">Método</label>
+              <select
+                value={metodoPagamento}
+                onChange={(e) => setMetodoPagamento(e.target.value as PaymentMethod)}
+                className="w-full mt-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500"
+              >
+                <option value="Pix/Débito">Pix / Débito</option>
+                <option value="Cartão de Crédito">Cartão de Crédito</option>
+                <option value="Dinheiro">Dinheiro</option>
+              </select>
+            </div>
+          </div>
+
+          {tipo === 'despesa' && metodoPagamento === 'Cartão de Crédito' && (
+            <div>
+              <label className="text-xs text-zinc-400 font-medium">Parcelas</label>
+              <input
+                type="number"
+                min={1}
+                max={24}
+                value={parcelas}
+                onChange={(e) => setParcelas(Number(e.target.value))}
+                className="w-full mt-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2 text-sm text-white"
+              />
+            </div>
+          )}
+
+          <div>
+            <label className="text-xs text-zinc-400 font-medium">Tags (opcional)</label>
+            <input
+              type="text"
+              placeholder="Ex: ifood, casamento, fds"
+              value={tags}
+              onChange={(e) => setTags(e.target.value)}
+              className="w-full mt-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={salvando}
+            className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-zinc-950 font-bold py-3 rounded-xl text-sm transition cursor-pointer"
+          >
+            {salvando ? 'Salvando na nuvem...' : 'Salvar Lançamento'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}

@@ -1,5 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { createClient } from '@supabase/supabase-js';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Wallet,
   TrendingUp,
@@ -7,11 +6,6 @@ import {
   PiggyBank,
   Plus,
   Search,
-  Trash2,
-  Calendar,
-  Tag,
-  MapPin,
-  CreditCard,
   ChevronLeft,
   ChevronRight,
   PieChart as PieChartIcon,
@@ -19,72 +13,26 @@ import {
   Home,
   Target,
   Users,
-  User,
-  Cloud,
-  CloudOff,
   RefreshCw,
   Settings,
-  X,
   Check,
-  AlertCircle
+  AlertCircle,
 } from 'lucide-react';
-
-// ============================================================================
-// CONFIGURAÇÃO DO SUPABASE
-// ============================================================================
-const SUPABASE_URL = 'https://lbnjohkoqqqbfiwgtfta.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_NvA1Efn5PmLID6MBOWq7wQ_kvPIJhaU';
-
-const supabase =
-  SUPABASE_URL && SUPABASE_ANON_KEY
-    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-    : null;
-
-// --- FUNÇÕES DE DATA NO FUSO HORÁRIO LOCAL (BRASIL) ---
-const obterDataHojeLocal = () => {
-  const hoje = new Date();
-  const ano = hoje.getFullYear();
-  const mes = String(hoje.getMonth() + 1).padStart(2, '0');
-  const dia = String(hoje.getDate()).padStart(2, '0');
-  return `${ano}-${mes}-${dia}`;
-};
-
-const obterMesAtualLocal = () => obterDataHojeLocal().slice(0, 7);
-
-// --- TIPAGENS ---
-type TransactionType = 'despesa' | 'receita' | 'poupanca';
-type PaymentMethod = 'Pix/Débito' | 'Cartão de Crédito' | 'Dinheiro';
-
-interface Transaction {
-  id: string;
-  tipo: TransactionType;
-  valor: number;
-  data: string; // YYYY-MM-DD
-  local: string;
-  categoria: string;
-  tags: string[];
-  metodoPagamento: PaymentMethod;
-  parcelaInfo?: string;
-  responsavel: string;
-  pendenteSync?: boolean; // Garante que nenhum gasto suma se a internet falhar
-}
-
-interface CategoryBudget {
-  categoria: string;
-  limite: number;
-}
-
-const CATEGORIAS_DESPESA = ['Comida', 'Lazer', 'Transporte', 'Contas Fixas', 'Casa/Casamento', 'Compras', 'Saúde', 'Outros'];
-const CATEGORIAS_RECEITA = ['Salário', 'Freelance', 'Rendimentos', 'Outros'];
-const CATEGORIAS_POUPANCA = ['Reserva do Casal', 'Casamento / Casa', 'Investimentos', 'Meta Individual'];
-
-const ORCAMENTOS_INICIAIS: CategoryBudget[] = [
-  { categoria: 'Comida', limite: 800 },
-  { categoria: 'Lazer', limite: 450 },
-  { categoria: 'Casa/Casamento', limite: 600 },
-  { categoria: 'Transporte', limite: 300 },
-  { categoria: 'Contas Fixas', limite: 700 },
-];
+import { supabase } from './supabaseClient';
+import {
+  type Transaction,
+  type TransactionType,
+  type PaymentMethod,
+  type ActiveTab,
+  type CategoryBudget,
+  ORCAMENTOS_INICIAIS,
+  obterMesAtualLocal,
+  formatarMoeda,
+  nomeMesAno,
+} from './types';
+import { CardTransacao } from './components/CardTransacao';
+import { ModalTransacao } from './components/ModalTransacao';
+import { ModalConfigCasal } from './components/ModalConfigCasal';
 
 export default function App() {
   // --- NOMES DO CASAL ---
@@ -92,8 +40,8 @@ export default function App() {
   const [pessoa2, setPessoa2] = useState(() => localStorage.getItem('@financas:pessoa2') || 'Noiva');
   const [modalConfigAberto, setModalConfigAberto] = useState(false);
 
-  // --- ESTADOS DE NAVEGAÇÃO ---
-  const [abaAtiva, setAbaAtiva] = useState<'home' | 'extrato' | 'metas' | 'graficos'>('home');
+  // --- NAVEGAÇÃO E FILTROS ---
+  const [abaAtiva, setAbaAtiva] = useState<ActiveTab>('home');
   const [modalAberto, setModalAberto] = useState(false);
   const [filtroPessoaGlobal, setFiltroPessoaGlobal] = useState<string>('Todos');
   const [mesSelecionado, setMesSelecionado] = useState(() => obterMesAtualLocal());
@@ -121,34 +69,18 @@ export default function App() {
 
   const [orcamentos] = useState<CategoryBudget[]>(ORCAMENTOS_INICIAIS);
 
-  // --- ESTADOS DO FORMULÁRIO ---
-  const [tipoForm, setTipoForm] = useState<TransactionType>('despesa');
-  const [responsavelForm, setResponsavelForm] = useState<string>(pessoa1);
-  const [valorForm, setValorForm] = useState('');
-  const [localForm, setLocalForm] = useState('');
-  const [dataForm, setDataForm] = useState(() => obterDataHojeLocal());
-  const [categoriaForm, setCategoriaForm] = useState('Comida');
-  const [tagsForm, setTagsForm] = useState('');
-  const [metodoForm, setMetodoForm] = useState<PaymentMethod>('Pix/Débito');
-  const [parcelasForm, setParcelasForm] = useState(1);
-
-  // --- BUSCA E EXTRATO ---
+  // --- BUSCA E META ---
   const [busca, setBusca] = useState('');
   const [filtroTipo, setFiltroTipo] = useState<'todos' | TransactionType>('todos');
-
-  // --- EDIÇÃO DE META ---
   const [editandoMeta, setEditandoMeta] = useState(false);
   const [novaMetaInput, setNovaMetaInput] = useState(metaPoupanca.toString());
 
-  // ============================================================================
-  // SINCRONIZAÇÃO INTELIGENTE COM SUPABASE (NUNCA APAGA DADOS LOCAIS PENDENTES)
-  // ============================================================================
+  // --- SINCRONIZAÇÃO COM SUPABASE ---
   const carregarDadosNuvem = async () => {
     if (!supabase) return;
     setSincronizando(true);
 
     try {
-      // 1. Primeiro verifica se há transações salvas no celular que falharam ao subir antes
       const localSalvo = localStorage.getItem('@financas:transacoes_casal');
       const listaLocal: Transaction[] = localSalvo ? JSON.parse(localSalvo) : [];
       const pendentes = listaLocal.filter((t) => t.pendenteSync);
@@ -169,7 +101,6 @@ export default function App() {
         await supabase.from('transacoes').upsert(payloadPendentes);
       }
 
-      // 2. Busca todas as transações da nuvem (sem limite curto)
       const { data: transData, error: transError } = await supabase
         .from('transacoes')
         .select('*')
@@ -178,7 +109,6 @@ export default function App() {
         .limit(2000);
 
       if (transError) {
-        console.error('Erro ao buscar transações:', transError.message);
         setErroNuvem(`Aviso de sincronização: ${transError.message}`);
         setSincronizando(false);
         return;
@@ -201,10 +131,8 @@ export default function App() {
           pendenteSync: false,
         }));
 
-        // Mescla: mantém qualquer item local que ainda esteja pendente e não tenha chegado na nuvem
         const idsNuvem = new Set(daNuvem.map((t) => t.id));
         const aindaPendentes = pendentes.filter((t) => !idsNuvem.has(t.id));
-
         setTransacoes([...aindaPendentes, ...daNuvem]);
       }
 
@@ -219,7 +147,7 @@ export default function App() {
         if (configData.pessoa1) setPessoa1(configData.pessoa1);
         if (configData.pessoa2) setPessoa2(configData.pessoa2);
       }
-    } catch (err: any) {
+    } catch {
       setErroNuvem('Sem conexão no momento. Seus gastos estão salvos no aparelho.');
     } finally {
       setSincronizando(false);
@@ -245,7 +173,6 @@ export default function App() {
     };
   }, []);
 
-  // Salva sempre no LocalStorage
   useEffect(() => {
     localStorage.setItem('@financas:transacoes_casal', JSON.stringify(transacoes));
   }, [transacoes]);
@@ -255,36 +182,6 @@ export default function App() {
     localStorage.setItem('@financas:pessoa2', pessoa2);
   }, [pessoa1, pessoa2]);
 
-  useEffect(() => {
-    if (tipoForm === 'despesa') setCategoriaForm(CATEGORIAS_DESPESA[0]);
-    if (tipoForm === 'receita') setCategoriaForm(CATEGORIAS_RECEITA[0]);
-    if (tipoForm === 'poupanca') setCategoriaForm(CATEGORIAS_POUPANCA[0]);
-  }, [tipoForm]);
-
-  // Garante que o responsável selecionado no modal sempre exista caso o nome tenha mudado
-  useEffect(() => {
-    if (responsavelForm !== pessoa1 && responsavelForm !== pessoa2 && responsavelForm !== 'Casal') {
-      setResponsavelForm(pessoa1);
-    }
-  }, [pessoa1, pessoa2]);
-
-  // --- FUNÇÕES UTILITÁRIAS ---
-  const formatarMoeda = (valor: number) =>
-    valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-
-  const formatarDataBR = (dataISO: string) => {
-    const partes = dataISO.split('-');
-    if (partes.length !== 3) return dataISO;
-    return `${partes[2]}/${partes[1]}/${partes[0]}`;
-  };
-
-  const nomeMesAno = (anoMes: string) => {
-    const [ano, mes] = anoMes.split('-').map(Number);
-    const data = new Date(ano, mes - 1, 1);
-    const nome = data.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
-    return nome.charAt(0).toUpperCase() + nome.slice(1);
-  };
-
   const mudarMes = (direcao: number) => {
     const [ano, mes] = mesSelecionado.split('-').map(Number);
     const novaData = new Date(ano, mes - 1 + direcao, 1);
@@ -293,7 +190,7 @@ export default function App() {
     );
   };
 
-  // --- FILTROS E CÁLCULOS ---
+  // --- CÁLCULOS ---
   const transacoesDoMes = useMemo(() => {
     return transacoes
       .filter((t) => t.data.startsWith(mesSelecionado))
@@ -339,35 +236,27 @@ export default function App() {
       .reduce((acc, t) => acc + t.valor, 0);
   }, [transacoes, filtroPessoaGlobal]);
 
-  // --- ADICIONAR TRANSAÇÃO COM PROTEÇÃO TOTAL CONTRA PERDA ---
-  const handleAdicionarTransacao = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (salvando) return;
-
-    // Aceita tanto 12,50 quanto 12.50 ou 1.200,50
-    const valorLimpo = valorForm.includes(',')
-      ? valorForm.replace(/\./g, '').replace(',', '.')
-      : valorForm;
-    const valorNumerico = parseFloat(valorLimpo);
-
-    if (isNaN(valorNumerico) || valorNumerico <= 0 || !localForm.trim()) {
-      alert('Preencha um valor válido e a descrição do lançamento.');
-      return;
-    }
-
+  // --- AÇÕES ---
+  const handleSalvarTransacao = async (dados: {
+    tipo: TransactionType;
+    responsavel: string;
+    valor: number;
+    data: string;
+    local: string;
+    categoria: string;
+    tags: string[];
+    metodoPagamento: PaymentMethod;
+    parcelas: number;
+  }) => {
     setSalvando(true);
-
-    const listaTags = tagsForm
-      .split(',')
-      .map((tag) => tag.trim())
-      .filter(Boolean)
-      .map((tag) => (tag.startsWith('#') ? tag : `#${tag}`));
 
     const novasTransacoes: Transaction[] = [];
     const numParcelas =
-      tipoForm === 'despesa' && metodoForm === 'Cartão de Crédito' ? Math.max(1, parcelasForm) : 1;
-    const valorParcela = Number((valorNumerico / numParcelas).toFixed(2));
-    const [anoBase, mesBase, diaBase] = dataForm.split('-').map(Number);
+      dados.tipo === 'despesa' && dados.metodoPagamento === 'Cartão de Crédito'
+        ? Math.max(1, dados.parcelas)
+        : 1;
+    const valorParcela = Number((dados.valor / numParcelas).toFixed(2));
+    const [anoBase, mesBase, diaBase] = dados.data.split('-').map(Number);
     const sufixoAleatorio = Math.random().toString(36).substring(2, 7);
 
     for (let i = 0; i < numParcelas; i++) {
@@ -379,29 +268,26 @@ export default function App() {
 
       novasTransacoes.push({
         id: `${Date.now()}-${sufixoAleatorio}-${i}`,
-        tipo: tipoForm,
+        tipo: dados.tipo,
         valor: valorParcela,
         data: dataStr,
-        local: localForm.trim(),
-        categoria: categoriaForm,
-        tags: listaTags,
-        metodoPagamento: metodoForm,
+        local: dados.local,
+        categoria: dados.categoria,
+        tags: dados.tags,
+        metodoPagamento: dados.metodoPagamento,
         parcelaInfo: numParcelas > 1 ? `${i + 1}/${numParcelas}` : undefined,
-        responsavel: responsavelForm,
-        pendenteSync: true, // Marcado como pendente até o Supabase confirmar!
+        responsavel: dados.responsavel,
+        pendenteSync: true,
       });
     }
 
-    // 1. Salva imediatamente no estado e no LocalStorage (para nunca perder)
     setTransacoes((prev) => [...novasTransacoes, ...prev]);
 
-    // Se a pessoa lançou um gasto de outro mês, muda a visão para o mês do gasto para ela ver na hora!
-    const mesDoLancamento = dataForm.slice(0, 7);
+    const mesDoLancamento = dados.data.slice(0, 7);
     if (mesDoLancamento !== mesSelecionado) {
       setMesSelecionado(mesDoLancamento);
     }
 
-    // 2. Envia para o Supabase
     if (supabase) {
       const payload = novasTransacoes.map((t) => ({
         id: t.id,
@@ -419,25 +305,17 @@ export default function App() {
       const { error } = await supabase.from('transacoes').upsert(payload);
 
       if (!error) {
-        // Confirmado na nuvem! Remove a flag pendenteSync
         const idsSalvos = new Set(novasTransacoes.map((t) => t.id));
         setTransacoes((prev) =>
           prev.map((t) => (idsSalvos.has(t.id) ? { ...t, pendenteSync: false } : t))
         );
         setErroNuvem(null);
       } else {
-        console.error('Erro ao salvar no Supabase:', error.message);
-        setErroNuvem(
-          `Salvo no celular, mas falhou ao enviar para nuvem (${error.message}). Clique no botão atualizar no topo.`
-        );
+        setErroNuvem(`Salvo no aparelho, mas falhou na nuvem (${error.message}).`);
       }
     }
 
     setSalvando(false);
-    setValorForm('');
-    setLocalForm('');
-    setTagsForm('');
-    setParcelasForm(1);
     setModalAberto(false);
   };
 
@@ -456,7 +334,6 @@ export default function App() {
     const nomeAntigoP1 = localStorage.getItem('@financas:pessoa1') || 'Juan';
     const nomeAntigoP2 = localStorage.getItem('@financas:pessoa2') || 'Noiva';
 
-    // Se mudou o nome na engrenagem, atualiza os lançamentos antigos para não sumirem do filtro!
     if (nomeAntigoP1 !== p1Final || nomeAntigoP2 !== p2Final) {
       setTransacoes((prev) =>
         prev.map((t) => {
@@ -523,228 +400,372 @@ export default function App() {
 
   const qtdPendentes = transacoes.filter((t) => t.pendenteSync).length;
 
+  const itensMenu = [
+    { id: 'home' as ActiveTab, label: 'Início', icone: Home },
+    { id: 'extrato' as ActiveTab, label: 'Extrato', icone: List },
+    { id: 'metas' as ActiveTab, label: 'Poupança & Metas', icone: Target },
+    { id: 'graficos' as ActiveTab, label: 'Análise', icone: PieChartIcon },
+  ];
+
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 pb-24 font-sans selection:bg-emerald-500 selection:text-zinc-950">
-      <div className="max-w-md mx-auto min-h-screen bg-zinc-900/50 border-x border-zinc-800/60 flex flex-col">
-        
-        {/* HEADER */}
-        <header className="sticky top-0 z-20 bg-zinc-950/90 backdrop-blur-md border-b border-zinc-800/80 px-4 pt-3 pb-2.5 space-y-2.5">
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col md:flex-row font-sans selection:bg-emerald-500 selection:text-zinc-950">
+      
+      {/* ==================== SIDEBAR DESKTOP (PC) ==================== */}
+      <aside className="hidden md:flex md:w-64 lg:w-72 md:flex-col md:fixed md:inset-y-0 bg-zinc-900/60 border-r border-zinc-800/80 p-5 justify-between z-30">
+        <div className="space-y-6">
+          {/* LOGO */}
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
-                <Wallet size={17} />
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+                <Wallet size={20} />
               </div>
               <div>
+                <span className="font-bold tracking-tight text-base text-white block leading-none">
+                  NossoFinanceiro
+                </span>
+                <span className="text-[11px] text-zinc-400">Gestão do Casal</span>
+              </div>
+            </div>
+            <button
+              onClick={() => setModalConfigAberto(true)}
+              className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white transition"
+              title="Configurar nomes do casal"
+            >
+              <Settings size={16} />
+            </button>
+          </div>
+
+          {/* BOTÃO NOVO LANÇAMENTO NO PC */}
+          <button
+            onClick={() => setModalAberto(true)}
+            className="w-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold py-3 px-4 rounded-xl text-sm shadow-lg shadow-emerald-500/15 flex items-center justify-center gap-2 transition cursor-pointer"
+          >
+            <Plus size={18} strokeWidth={2.5} />
+            Novo Lançamento
+          </button>
+
+          {/* MENU DE NAVEGAÇÃO DESKTOP */}
+          <nav className="space-y-1.5">
+            {itensMenu.map((item) => {
+              const Icone = item.icone;
+              const ativo = abaAtiva === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => setAbaAtiva(item.id)}
+                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition ${
+                    ativo
+                      ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-semibold'
+                      : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50'
+                  }`}
+                >
+                  <Icone size={18} />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+        </div>
+
+        {/* RODAPÉ DA SIDEBAR: STATUS DA NUVEM */}
+        <div className="pt-4 border-t border-zinc-800/80 space-y-2">
+          <button
+            onClick={carregarDadosNuvem}
+            className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-zinc-300 hover:border-zinc-700 transition"
+          >
+            <span className="flex items-center gap-2">
+              <RefreshCw size={13} className={sincronizando ? 'animate-spin text-emerald-400' : 'text-emerald-400'} />
+              {sincronizando
+                ? 'Sincronizando...'
+                : qtdPendentes > 0
+                ? `${qtdPendentes} pendente(s)`
+                : 'Sincronizado na Nuvem'}
+            </span>
+            <span className="w-2 h-2 rounded-full bg-emerald-400" />
+          </button>
+        </div>
+      </aside>
+
+      {/* ==================== ÁREA PRINCIPAL (MOBILE + PC) ==================== */}
+      <div className="flex-1 md:pl-64 lg:pl-72 flex flex-col min-h-screen pb-24 md:pb-10">
+        
+        {/* HEADER RESPONSIVO */}
+        <header className="sticky top-0 z-20 bg-zinc-950/90 backdrop-blur-md border-b border-zinc-800/80 px-4 md:px-8 py-3">
+          <div className="max-w-6xl mx-auto flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-2">
+              {/* LOGO VISÍVEL APENAS NO MOBILE */}
+              <div className="flex items-center gap-2 md:hidden">
+                <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+                  <Wallet size={17} />
+                </div>
                 <div className="flex items-center gap-1.5">
-                  <span className="font-bold tracking-tight text-sm text-zinc-100">NossoFinanceiro</span>
+                  <span className="font-bold tracking-tight text-sm text-zinc-100">
+                    NossoFinanceiro
+                  </span>
                   <button
                     onClick={carregarDadosNuvem}
-                    title="Clique para forçar sincronização"
-                    className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full transition ${
+                    className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full ${
                       supabase && !erroNuvem && qtdPendentes === 0
-                        ? 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25'
+                        ? 'bg-emerald-500/15 text-emerald-400'
                         : 'bg-amber-500/20 text-amber-300'
                     }`}
                   >
                     <RefreshCw size={10} className={sincronizando ? 'animate-spin' : ''} />
-                    {sincronizando
-                      ? 'Sincronizando...'
-                      : qtdPendentes > 0
-                      ? `${qtdPendentes} pendente(s)`
-                      : supabase && !erroNuvem
-                      ? 'Online'
-                      : 'Local'}
+                    {sincronizando ? 'Sync...' : qtdPendentes > 0 ? `${qtdPendentes}` : 'Online'}
                   </button>
                 </div>
               </div>
-            </div>
 
-            <div className="flex items-center gap-1.5">
-              {/* SELETOR DE MÊS */}
-              <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-full px-1.5 py-1">
-                <button onClick={() => mudarMes(-1)} className="p-1 text-zinc-400 hover:text-white">
-                  <ChevronLeft size={15} />
-                </button>
-                <span className="text-[11px] font-medium px-1.5 min-w-[105px] text-center">
-                  {nomeMesAno(mesSelecionado)}
-                </span>
-                <button onClick={() => mudarMes(1)} className="p-1 text-zinc-400 hover:text-white">
-                  <ChevronRight size={15} />
-                </button>
+              {/* TÍTULO DA SEÇÃO NO DESKTOP */}
+              <div className="hidden md:block">
+                <h1 className="text-lg font-bold text-white">
+                  {itensMenu.find((i) => i.id === abaAtiva)?.label}
+                </h1>
               </div>
 
-              <button
-                onClick={() => setModalConfigAberto(true)}
-                className="p-2 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white"
-                title="Configurar nomes do casal"
-              >
-                <Settings size={15} />
-              </button>
-            </div>
-          </div>
+              {/* SELETOR DE MÊS E ENGRENAGEM */}
+              <div className="flex items-center gap-2 ml-auto">
+                <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-full px-2 py-1">
+                  <button
+                    onClick={() => mudarMes(-1)}
+                    className="p-1 text-zinc-400 hover:text-white transition"
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  <span className="text-xs md:text-sm font-medium px-2 min-w-[115px] md:min-w-[140px] text-center">
+                    {nomeMesAno(mesSelecionado)}
+                  </span>
+                  <button
+                    onClick={() => mudarMes(1)}
+                    className="p-1 text-zinc-400 hover:text-white transition"
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
 
-          {erroNuvem && (
-            <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-2.5 py-1.5 text-[11px] text-amber-300 flex items-center justify-between gap-2">
-              <span className="flex items-center gap-1.5">
-                <AlertCircle size={13} className="shrink-0" /> {erroNuvem}
-              </span>
-              <button
-                onClick={carregarDadosNuvem}
-                className="underline font-semibold shrink-0 text-amber-200"
-              >
-                Reenviar
-              </button>
+                <button
+                  onClick={() => setModalConfigAberto(true)}
+                  className="md:hidden p-2 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white"
+                >
+                  <Settings size={15} />
+                </button>
+              </div>
             </div>
-          )}
 
-          {/* FILTRO DE VISÃO DO CASAL */}
-          <div className="grid grid-cols-4 gap-1.5 bg-zinc-900/90 p-1 rounded-xl border border-zinc-800/80">
-            {(['Todos', pessoa1, pessoa2, 'Casal'] as const).map((item) => (
-              <button
-                key={item}
-                onClick={() => setFiltroPessoaGlobal(item)}
-                className={`py-1.5 rounded-lg text-xs font-semibold transition truncate px-1 ${
-                  filtroPessoaGlobal === item
-                    ? 'bg-emerald-500 text-zinc-950 shadow'
-                    : 'text-zinc-400 hover:text-zinc-200'
-                }`}
-              >
-                {item === 'Todos' ? 'Visão Geral' : item}
-              </button>
-            ))}
+            {erroNuvem && (
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-1.5 text-xs text-amber-300 flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5">
+                  <AlertCircle size={14} className="shrink-0" /> {erroNuvem}
+                </span>
+                <button
+                  onClick={carregarDadosNuvem}
+                  className="underline font-semibold shrink-0 text-amber-200"
+                >
+                  Reenviar
+                </button>
+              </div>
+            )}
+
+            {/* FILTRO DE VISÃO DO CASAL */}
+            <div className="grid grid-cols-4 gap-1.5 bg-zinc-900/90 p-1 rounded-xl border border-zinc-800/80 max-w-xl">
+              {(['Todos', pessoa1, pessoa2, 'Casal'] as const).map((item) => (
+                <button
+                  key={item}
+                  onClick={() => setFiltroPessoaGlobal(item)}
+                  className={`py-1.5 rounded-lg text-xs font-semibold transition truncate px-2 cursor-pointer ${
+                    filtroPessoaGlobal === item
+                      ? 'bg-emerald-500 text-zinc-950 shadow'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  {item === 'Todos' ? 'Visão Geral' : item}
+                </button>
+              ))}
+            </div>
           </div>
         </header>
 
-        {/* CONTEÚDO PRINCIPAL */}
-        <main className="flex-1 p-4 space-y-5">
+        {/* CONTEÚDO CENTRALIZADO COM LARGURA MÁXIMA PARA DESKTOP */}
+        <main className="flex-1 px-4 md:px-8 py-5 max-w-6xl w-full mx-auto space-y-6">
+          
+          {/* ==================== ABA 1: HOME ==================== */}
           {abaAtiva === 'home' && (
-            <>
-              {/* CARD PRINCIPAL */}
-              <div className="bg-gradient-to-br from-zinc-900 via-zinc-900 to-emerald-950/40 border border-zinc-800 rounded-2xl p-5 shadow-lg">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs text-zinc-400 font-medium uppercase tracking-wider">
-                    Saldo Livre ({filtroPessoaGlobal === 'Todos' ? 'Nosso Total' : filtroPessoaGlobal})
-                  </p>
-                  <Users size={15} className="text-emerald-400" />
+            <div className="space-y-6">
+              {/* GRID SUPERIOR: SALDO + RESUMO DO CASAL LADO A LADO NO PC */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+                
+                {/* CARD PRINCIPAL (7 COLUNAS NO PC) */}
+                <div className="lg:col-span-7 bg-gradient-to-br from-zinc-900 via-zinc-900 to-emerald-950/40 border border-zinc-800 rounded-2xl p-5 md:p-6 shadow-lg flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs text-zinc-400 font-medium uppercase tracking-wider">
+                        Saldo Livre ({filtroPessoaGlobal === 'Todos' ? 'Nosso Total' : filtroPessoaGlobal})
+                      </p>
+                      <Users size={16} className="text-emerald-400" />
+                    </div>
+                    <h2
+                      className={`text-3xl md:text-4xl font-extrabold mt-1 ${
+                        resumoMes.saldoLivre >= 0 ? 'text-white' : 'text-rose-400'
+                      }`}
+                    >
+                      {formatarMoeda(resumoMes.saldoLivre)}
+                    </h2>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3 mt-5 pt-4 border-t border-zinc-800/80">
+                    <div className="bg-zinc-950/60 p-3 rounded-xl border border-zinc-800/60">
+                      <div className="flex items-center gap-1 text-emerald-400 text-xs font-medium">
+                        <TrendingUp size={14} />
+                        <span>Entradas</span>
+                      </div>
+                      <p className="text-sm md:text-base font-bold mt-1 text-zinc-100 truncate">
+                        {formatarMoeda(resumoMes.receitas)}
+                      </p>
+                    </div>
+
+                    <div className="bg-zinc-950/60 p-3 rounded-xl border border-zinc-800/60">
+                      <div className="flex items-center gap-1 text-rose-400 text-xs font-medium">
+                        <TrendingDown size={14} />
+                        <span>Gastos</span>
+                      </div>
+                      <p className="text-sm md:text-base font-bold mt-1 text-zinc-100 truncate">
+                        {formatarMoeda(resumoMes.despesas)}
+                      </p>
+                    </div>
+
+                    <div className="bg-zinc-950/60 p-3 rounded-xl border border-zinc-800/60">
+                      <div className="flex items-center gap-1 text-sky-400 text-xs font-medium">
+                        <PiggyBank size={14} />
+                        <span>Guardado</span>
+                      </div>
+                      <p className="text-sm md:text-base font-bold mt-1 text-zinc-100 truncate">
+                        {formatarMoeda(resumoMes.poupadoMes)}
+                      </p>
+                    </div>
+                  </div>
                 </div>
-                <h1
-                  className={`text-3xl font-extrabold mt-1 ${
-                    resumoMes.saldoLivre >= 0 ? 'text-white' : 'text-rose-400'
-                  }`}
-                >
-                  {formatarMoeda(resumoMes.saldoLivre)}
-                </h1>
 
-                <div className="grid grid-cols-3 gap-2.5 mt-4 pt-4 border-t border-zinc-800/80">
-                  <div className="bg-zinc-950/60 p-2.5 rounded-xl border border-zinc-800/60">
-                    <div className="flex items-center gap-1 text-emerald-400 text-xs font-medium">
-                      <TrendingUp size={13} />
-                      <span>Entradas</span>
-                    </div>
-                    <p className="text-sm font-bold mt-1 text-zinc-100 truncate">
-                      {formatarMoeda(resumoMes.receitas)}
+                {/* DIVISÃO DE GASTOS NO MÊS (5 COLUNAS NO PC) */}
+                <div className="lg:col-span-5 bg-zinc-900/60 border border-zinc-800/80 rounded-2xl p-5 flex flex-col justify-between space-y-4">
+                  <div>
+                    <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+                      Divisão de Gastos no Mês
+                    </p>
+                    <p className="text-xs text-zinc-500 mt-0.5">
+                      Comparativo de saídas por responsável
                     </p>
                   </div>
 
-                  <div className="bg-zinc-950/60 p-2.5 rounded-xl border border-zinc-800/60">
-                    <div className="flex items-center gap-1 text-rose-400 text-xs font-medium">
-                      <TrendingDown size={13} />
-                      <span>Gastos</span>
+                  <div className="grid grid-cols-3 gap-2.5 text-center">
+                    <div className="bg-zinc-950/70 border border-zinc-800/70 rounded-xl p-3">
+                      <span className="text-xs text-indigo-400 font-semibold block truncate">
+                        {pessoa1}
+                      </span>
+                      <span className="text-sm font-bold text-zinc-100 mt-1 block">
+                        {formatarMoeda(resumoPorPessoa.p1Gastos)}
+                      </span>
                     </div>
-                    <p className="text-sm font-bold mt-1 text-zinc-100 truncate">
-                      {formatarMoeda(resumoMes.despesas)}
-                    </p>
+                    <div className="bg-zinc-950/70 border border-zinc-800/70 rounded-xl p-3">
+                      <span className="text-xs text-pink-400 font-semibold block truncate">
+                        {pessoa2}
+                      </span>
+                      <span className="text-sm font-bold text-zinc-100 mt-1 block">
+                        {formatarMoeda(resumoPorPessoa.p2Gastos)}
+                      </span>
+                    </div>
+                    <div className="bg-zinc-950/70 border border-zinc-800/70 rounded-xl p-3">
+                      <span className="text-xs text-amber-400 font-semibold block truncate">
+                        Ambos/Casal
+                      </span>
+                      <span className="text-sm font-bold text-zinc-100 mt-1 block">
+                        {formatarMoeda(resumoPorPessoa.casalGastos)}
+                      </span>
+                    </div>
                   </div>
 
-                  <div className="bg-zinc-950/60 p-2.5 rounded-xl border border-zinc-800/60">
-                    <div className="flex items-center gap-1 text-sky-400 text-xs font-medium">
-                      <PiggyBank size={13} />
-                      <span>Guardado</span>
+                  <div
+                    onClick={() => setAbaAtiva('metas')}
+                    className="bg-sky-950/25 border border-sky-900/40 rounded-xl p-3 flex items-center justify-between cursor-pointer hover:bg-sky-950/40 transition"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <PiggyBank size={18} className="text-sky-400" />
+                      <span className="text-xs text-sky-200 font-medium">
+                        Poupança Total Acumulada:
+                      </span>
                     </div>
-                    <p className="text-sm font-bold mt-1 text-zinc-100 truncate">
-                      {formatarMoeda(resumoMes.poupadoMes)}
-                    </p>
+                    <strong className="text-sm text-sky-300">
+                      {formatarMoeda(totalPoupancaAcumulada)}
+                    </strong>
                   </div>
                 </div>
               </div>
 
-              {/* RESUMO RÁPIDO DE QUEM GASTOU QUANTO NO MÊS */}
-              <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-2xl p-4 space-y-2.5">
-                <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
-                  Divisão de Gastos no Mês
-                </p>
-                <div className="grid grid-cols-3 gap-2 text-center">
-                  <div className="bg-zinc-950/70 border border-zinc-800/70 rounded-xl p-2.5">
-                    <span className="text-[11px] text-indigo-400 font-semibold block truncate">
-                      {pessoa1}
-                    </span>
-                    <span className="text-xs font-bold text-zinc-100 mt-0.5 block">
-                      {formatarMoeda(resumoPorPessoa.p1Gastos)}
-                    </span>
-                  </div>
-                  <div className="bg-zinc-950/70 border border-zinc-800/70 rounded-xl p-2.5">
-                    <span className="text-[11px] text-pink-400 font-semibold block truncate">
-                      {pessoa2}
-                    </span>
-                    <span className="text-xs font-bold text-zinc-100 mt-0.5 block">
-                      {formatarMoeda(resumoPorPessoa.p2Gastos)}
-                    </span>
-                  </div>
-                  <div className="bg-zinc-950/70 border border-zinc-800/70 rounded-xl p-2.5">
-                    <span className="text-[11px] text-amber-400 font-semibold block truncate">
-                      Ambos/Casal
-                    </span>
-                    <span className="text-xs font-bold text-zinc-100 mt-0.5 block">
-                      {formatarMoeda(resumoPorPessoa.casalGastos)}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* TODOS OS LANÇAMENTOS DO MÊS (SEM ESCONDER APÓS O 6º) */}
+              {/* LISTA DE LANÇAMENTOS EM 1 COLUNA NO MOBILE E 2 COLUNAS NO PC */}
               <div>
                 <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-sm font-semibold text-zinc-300">
+                  <h2 className="text-sm md:text-base font-semibold text-zinc-200">
                     Lançamentos do Mês ({transacoesDoMes.length})
                   </h2>
                   <button
                     onClick={() => setAbaAtiva('extrato')}
-                    className="text-xs text-emerald-400 hover:underline"
+                    className="text-xs md:text-sm text-emerald-400 hover:underline"
                   >
-                    Buscar / Filtrar
+                    Pesquisar / Filtrar
                   </button>
                 </div>
 
                 {transacoesDoMes.length === 0 ? (
-                  <div className="text-center py-8 bg-zinc-900/40 border border-zinc-800/60 rounded-2xl">
+                  <div className="text-center py-12 bg-zinc-900/40 border border-zinc-800/60 rounded-2xl">
                     <p className="text-sm text-zinc-400">Nenhum lançamento neste mês.</p>
-                    <p className="text-xs text-zinc-500 mt-1">Clique no botão + abaixo para adicionar.</p>
+                    <p className="text-xs text-zinc-500 mt-1">
+                      Use o botão "+ Novo Lançamento" para registrar.
+                    </p>
                   </div>
                 ) : (
-                  <div className="space-y-2.5">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                     {transacoesDoMes.map((t) => (
                       <CardTransacao
                         key={t.id}
                         transacao={t}
                         pessoa1={pessoa1}
-                        formatarMoeda={formatarMoeda}
-                        formatarDataBR={formatarDataBR}
                         onExcluir={handleExcluir}
                       />
                     ))}
                   </div>
                 )}
               </div>
-            </>
+            </div>
           )}
 
-          {/* ABA 2: EXTRATO */}
+          {/* ==================== ABA 2: EXTRATO ==================== */}
           {abaAtiva === 'extrato' && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-bold">Extrato Compartilhado</h2>
-                <span className="text-xs text-zinc-400">{transacoesFiltradas.length} registro(s)</span>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-bold">Extrato Compartilhado</h2>
+                  <p className="text-xs text-zinc-400">
+                    {transacoesFiltradas.length} registro(s) encontrado(s)
+                  </p>
+                </div>
+
+                {/* FILTROS RÁPIDOS */}
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {(['todos', 'despesa', 'receita', 'poupanca'] as const).map((tipo) => (
+                    <button
+                      key={tipo}
+                      onClick={() => setFiltroTipo(tipo)}
+                      className={`px-3.5 py-1.5 rounded-full text-xs font-medium capitalize transition cursor-pointer ${
+                        filtroTipo === tipo
+                          ? 'bg-emerald-500 text-zinc-950 font-semibold'
+                          : 'bg-zinc-900 text-zinc-400 border border-zinc-800 hover:text-zinc-200'
+                      }`}
+                    >
+                      {tipo === 'poupanca' ? 'Poupança' : tipo}
+                    </button>
+                  ))}
+                </div>
               </div>
+
               <div className="relative">
                 <Search size={16} className="absolute left-3.5 top-3 text-zinc-500" />
                 <input
@@ -756,30 +777,12 @@ export default function App() {
                 />
               </div>
 
-              <div className="flex gap-2 overflow-x-auto pb-1">
-                {(['todos', 'despesa', 'receita', 'poupanca'] as const).map((tipo) => (
-                  <button
-                    key={tipo}
-                    onClick={() => setFiltroTipo(tipo)}
-                    className={`px-3 py-1.5 rounded-full text-xs font-medium capitalize transition ${
-                      filtroTipo === tipo
-                        ? 'bg-emerald-500 text-zinc-950 font-semibold'
-                        : 'bg-zinc-900 text-zinc-400 border border-zinc-800'
-                    }`}
-                  >
-                    {tipo === 'poupanca' ? 'Poupança' : tipo}
-                  </button>
-                ))}
-              </div>
-
-              <div className="space-y-2.5">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                 {transacoesFiltradas.map((t) => (
                   <CardTransacao
                     key={t.id}
                     transacao={t}
                     pessoa1={pessoa1}
-                    formatarMoeda={formatarMoeda}
-                    formatarDataBR={formatarDataBR}
                     onExcluir={handleExcluir}
                   />
                 ))}
@@ -787,10 +790,10 @@ export default function App() {
             </div>
           )}
 
-          {/* ABA 3: POUPANÇA & METAS */}
+          {/* ==================== ABA 3: POUPANÇA & METAS ==================== */}
           {abaAtiva === 'metas' && (
-            <div className="space-y-6">
-              <div className="bg-gradient-to-br from-sky-950/50 to-zinc-900 border border-sky-900/50 rounded-2xl p-5">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              <div className="lg:col-span-5 bg-gradient-to-br from-sky-950/50 to-zinc-900 border border-sky-900/50 rounded-2xl p-5 h-fit">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-sky-400">
                     <PiggyBank size={20} />
@@ -807,10 +810,10 @@ export default function App() {
                   </button>
                 </div>
 
-                <p className="text-2xl font-extrabold text-white mt-2">
+                <p className="text-3xl font-extrabold text-white mt-3">
                   {formatarMoeda(totalPoupancaAcumulada)}
                 </p>
-                <p className="text-xs text-zinc-400 mt-0.5">
+                <p className="text-xs text-zinc-400 mt-1">
                   Meta: {formatarMoeda(metaPoupanca)} (
                   {Math.min(100, Math.round((totalPoupancaAcumulada / metaPoupanca) * 100))}%)
                 </p>
@@ -848,13 +851,13 @@ export default function App() {
                   />
                 </div>
 
-                <div className="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-sky-900/40 text-center text-xs">
+                <div className="grid grid-cols-3 gap-2 mt-5 pt-4 border-t border-sky-900/40 text-center text-xs">
                   <div>
-                    <span className="text-zinc-400 block">{pessoa1} (Mês)</span>
+                    <span className="text-zinc-400 block truncate">{pessoa1} (Mês)</span>
                     <strong className="text-sky-300">{formatarMoeda(resumoPorPessoa.p1Poupanca)}</strong>
                   </div>
                   <div>
-                    <span className="text-zinc-400 block">{pessoa2} (Mês)</span>
+                    <span className="text-zinc-400 block truncate">{pessoa2} (Mês)</span>
                     <strong className="text-sky-300">{formatarMoeda(resumoPorPessoa.p2Poupanca)}</strong>
                   </div>
                   <div>
@@ -864,9 +867,11 @@ export default function App() {
                 </div>
               </div>
 
-              <div>
-                <h3 className="text-sm font-semibold text-zinc-300 mb-3">Teto de Gastos Mensal</h3>
-                <div className="space-y-3">
+              <div className="lg:col-span-7">
+                <h3 className="text-sm md:text-base font-semibold text-zinc-200 mb-3">
+                  Teto de Gastos Mensal
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {orcamentos.map((orc) => {
                     const gastoAtual = transacoesDoMes
                       .filter((t) => t.tipo === 'despesa' && t.categoria === orc.categoria)
@@ -877,18 +882,22 @@ export default function App() {
                     return (
                       <div
                         key={orc.categoria}
-                        className="bg-zinc-900/70 border border-zinc-800/80 rounded-xl p-3.5"
+                        className="bg-zinc-900/70 border border-zinc-800/80 rounded-xl p-4"
                       >
-                        <div className="flex justify-between text-xs mb-1.5">
+                        <div className="flex justify-between text-xs mb-2">
                           <span className="font-semibold text-zinc-200">{orc.categoria}</span>
                           <span className={estourou ? 'text-rose-400 font-bold' : 'text-zinc-400'}>
                             {formatarMoeda(gastoAtual)} / {formatarMoeda(orc.limite)}
                           </span>
                         </div>
-                        <div className="w-full h-2 bg-zinc-950 rounded-full overflow-hidden">
+                        <div className="w-full h-2.5 bg-zinc-950 rounded-full overflow-hidden">
                           <div
                             className={`h-full rounded-full ${
-                              estourou ? 'bg-rose-500' : pct > 80 ? 'bg-amber-400' : 'bg-emerald-400'
+                              estourou
+                                ? 'bg-rose-500'
+                                : pct > 80
+                                ? 'bg-amber-400'
+                                : 'bg-emerald-400'
                             }`}
                             style={{ width: `${pct}%` }}
                           />
@@ -901,26 +910,29 @@ export default function App() {
             </div>
           )}
 
-          {/* ABA 4: ANÁLISE */}
+          {/* ==================== ABA 4: ANÁLISE ==================== */}
           {abaAtiva === 'graficos' && (
-            <div className="space-y-5">
+            <div className="space-y-5 max-w-3xl">
               <h2 className="text-lg font-bold">Análise de Gastos por Categoria</h2>
               {gastosPorCategoria.length === 0 ? (
                 <p className="text-sm text-zinc-500 py-8 text-center">Sem despesas neste mês.</p>
               ) : (
-                <div className="bg-zinc-900/70 border border-zinc-800 rounded-2xl p-4 space-y-4">
+                <div className="bg-zinc-900/70 border border-zinc-800 rounded-2xl p-5 space-y-4">
                   {gastosPorCategoria.map((item) => {
                     const pct = Math.round((item.total / resumoMes.despesas) * 100) || 0;
                     return (
                       <div key={item.categoria} className="space-y-1.5">
-                        <div className="flex justify-between text-xs">
+                        <div className="flex justify-between text-xs md:text-sm">
                           <span className="font-medium text-zinc-200">{item.categoria}</span>
                           <span className="text-zinc-400">
                             <strong className="text-zinc-100">{formatarMoeda(item.total)}</strong> ({pct}%)
                           </span>
                         </div>
                         <div className="w-full h-2.5 bg-zinc-950 rounded-full overflow-hidden">
-                          <div className="h-full bg-emerald-400 rounded-full" style={{ width: `${pct}%` }} />
+                          <div
+                            className="h-full bg-emerald-400 rounded-full"
+                            style={{ width: `${pct}%` }}
+                          />
                         </div>
                       </div>
                     );
@@ -931,8 +943,8 @@ export default function App() {
           )}
         </main>
 
-        {/* BOTTOM NAVIGATION */}
-        <nav className="fixed bottom-0 left-0 right-0 z-30 bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800/80">
+        {/* ==================== BOTTOM NAVIGATION (APENAS MOBILE) ==================== */}
+        <nav className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800/80">
           <div className="max-w-md mx-auto px-4 h-16 flex items-center justify-between relative">
             <button
               onClick={() => setAbaAtiva('home')}
@@ -954,10 +966,7 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => {
-                setDataForm(obterDataHojeLocal());
-                setModalAberto(true);
-              }}
+              onClick={() => setModalAberto(true)}
               className="absolute left-1/2 -translate-x-1/2 -top-5 w-14 h-14 rounded-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 shadow-lg shadow-emerald-500/25 flex items-center justify-center transition transform active:scale-95"
             >
               <Plus size={28} strokeWidth={2.5} />
@@ -984,336 +993,23 @@ export default function App() {
           </div>
         </nav>
 
-        {/* MODAL DE NOVO LANÇAMENTO */}
-        {modalAberto && (
-          <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
-            <div className="bg-zinc-900 border border-zinc-800 w-full max-w-md rounded-t-3xl sm:rounded-2xl p-5 space-y-3.5">
-              <div className="flex items-center justify-between">
-                <h3 className="font-bold text-base">Novo Lançamento</h3>
-                <button
-                  onClick={() => setModalAberto(false)}
-                  className="p-1.5 rounded-full bg-zinc-800 text-zinc-400 hover:text-white"
-                >
-                  <X size={18} />
-                </button>
-              </div>
+        {/* MODAIS */}
+        <ModalTransacao
+          aberto={modalAberto}
+          onFechar={() => setModalAberto(false)}
+          pessoa1={pessoa1}
+          pessoa2={pessoa2}
+          salvando={salvando}
+          onSalvar={handleSalvarTransacao}
+        />
 
-              {/* TIPO */}
-              <div className="grid grid-cols-3 gap-2 bg-zinc-950 p-1 rounded-xl border border-zinc-800">
-                <button
-                  type="button"
-                  onClick={() => setTipoForm('despesa')}
-                  className={`py-2 rounded-lg text-xs font-bold ${
-                    tipoForm === 'despesa' ? 'bg-rose-500 text-white' : 'text-zinc-400'
-                  }`}
-                >
-                  Gastei
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTipoForm('receita')}
-                  className={`py-2 rounded-lg text-xs font-bold ${
-                    tipoForm === 'receita' ? 'bg-emerald-500 text-zinc-950' : 'text-zinc-400'
-                  }`}
-                >
-                  Recebi
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTipoForm('poupanca')}
-                  className={`py-2 rounded-lg text-xs font-bold ${
-                    tipoForm === 'poupanca' ? 'bg-sky-500 text-zinc-950' : 'text-zinc-400'
-                  }`}
-                >
-                  Guardei
-                </button>
-              </div>
-
-              {/* QUEM FEZ O LANÇAMENTO? */}
-              <div>
-                <label className="text-[11px] text-zinc-400 font-medium">
-                  De quem é esse registro?
-                </label>
-                <div className="grid grid-cols-3 gap-2 mt-1">
-                  {[pessoa1, pessoa2, 'Casal'].map((resp) => (
-                    <button
-                      type="button"
-                      key={resp}
-                      onClick={() => setResponsavelForm(resp)}
-                      className={`py-2 px-2 rounded-xl text-xs font-bold border transition flex items-center justify-center gap-1.5 ${
-                        responsavelForm === resp
-                          ? 'bg-zinc-100 text-zinc-950 border-white'
-                          : 'bg-zinc-950 text-zinc-400 border-zinc-800'
-                      }`}
-                    >
-                      {resp === 'Casal' ? <Users size={13} /> : <User size={13} />}
-                      <span className="truncate">{resp}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <form onSubmit={handleAdicionarTransacao} className="space-y-3">
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div>
-                    <label className="text-[11px] text-zinc-400 font-medium">Valor (R$)</label>
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      required
-                      placeholder="Ex: 45,90"
-                      value={valorForm}
-                      onChange={(e) => setValorForm(e.target.value)}
-                      className="w-full mt-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm font-bold text-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] text-zinc-400 font-medium">Data</label>
-                    <input
-                      type="date"
-                      required
-                      value={dataForm}
-                      onChange={(e) => setDataForm(e.target.value)}
-                      className="w-full mt-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-zinc-200"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-[11px] text-zinc-400 font-medium">Onde foi / Descrição</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: Supermercado, iFood, Salário..."
-                    value={localForm}
-                    onChange={(e) => setLocalForm(e.target.value)}
-                    className="w-full mt-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div>
-                    <label className="text-[11px] text-zinc-400 font-medium">Categoria</label>
-                    <select
-                      value={categoriaForm}
-                      onChange={(e) => setCategoriaForm(e.target.value)}
-                      className="w-full mt-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-zinc-200"
-                    >
-                      {(tipoForm === 'despesa'
-                        ? CATEGORIAS_DESPESA
-                        : tipoForm === 'receita'
-                        ? CATEGORIAS_RECEITA
-                        : CATEGORIAS_POUPANCA
-                      ).map((cat) => (
-                        <option key={cat} value={cat}>
-                          {cat}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-[11px] text-zinc-400 font-medium">Método</label>
-                    <select
-                      value={metodoForm}
-                      onChange={(e) => setMetodoForm(e.target.value as PaymentMethod)}
-                      className="w-full mt-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-zinc-200"
-                    >
-                      <option value="Pix/Débito">Pix / Débito</option>
-                      <option value="Cartão de Crédito">Cartão de Crédito</option>
-                      <option value="Dinheiro">Dinheiro</option>
-                    </select>
-                  </div>
-                </div>
-
-                {tipoForm === 'despesa' && metodoForm === 'Cartão de Crédito' && (
-                  <div>
-                    <label className="text-[11px] text-zinc-400 font-medium">Parcelas</label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={24}
-                      value={parcelasForm}
-                      onChange={(e) => setParcelasForm(Number(e.target.value))}
-                      className="w-full mt-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm text-white"
-                    />
-                  </div>
-                )}
-
-                <div>
-                  <label className="text-[11px] text-zinc-400 font-medium">Tags (opcional)</label>
-                  <input
-                    type="text"
-                    placeholder="Ex: ifood, casamento, fds"
-                    value={tagsForm}
-                    onChange={(e) => setTagsForm(e.target.value)}
-                    className="w-full mt-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-white"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={salvando}
-                  className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-zinc-950 font-bold py-3 rounded-xl text-sm transition"
-                >
-                  {salvando ? 'Salvando na nuvem...' : 'Salvar Lançamento'}
-                </button>
-              </form>
-            </div>
-          </div>
-        )}
-
-        {/* MODAL DE CONFIGURAÇÃO DOS NOMES DO CASAL */}
-        {modalConfigAberto && (
-          <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="bg-zinc-900 border border-zinc-800 w-full max-w-sm rounded-2xl p-5 space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="font-bold text-sm">Personalizar Nomes do Casal</h3>
-                <button onClick={() => setModalConfigAberto(false)} className="text-zinc-400">
-                  <X size={18} />
-                </button>
-              </div>
-              <div className="space-y-3">
-                <div>
-                  <label className="text-xs text-zinc-400">Seu Nome</label>
-                  <input
-                    type="text"
-                    value={pessoa1}
-                    onChange={(e) => setPessoa1(e.target.value)}
-                    className="w-full mt-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-zinc-400">Nome da sua Noiva</label>
-                  <input
-                    type="text"
-                    value={pessoa2}
-                    onChange={(e) => setPessoa2(e.target.value)}
-                    className="w-full mt-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-sm"
-                  />
-                </div>
-                <button
-                  onClick={() => {
-                    salvarConfigCasal(metaPoupanca, pessoa1, pessoa2);
-                    setModalConfigAberto(false);
-                  }}
-                  className="w-full bg-emerald-500 text-zinc-950 font-bold py-2.5 rounded-xl text-xs"
-                >
-                  Salvar e Atualizar Registros
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// --- SUBCOMPONENTE DE CARD DE TRANSAÇÃO ---
-function CardTransacao({
-  transacao,
-  pessoa1,
-  formatarMoeda,
-  formatarDataBR,
-  onExcluir,
-}: {
-  transacao: Transaction;
-  pessoa1: string;
-  formatarMoeda: (v: number) => string;
-  formatarDataBR: (d: string) => string;
-  onExcluir: (id: string) => void;
-}) {
-  const isReceita = transacao.tipo === 'receita';
-  const isPoupanca = transacao.tipo === 'poupanca';
-
-  const corBadgePessoa =
-    transacao.responsavel === pessoa1
-      ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30'
-      : transacao.responsavel === 'Casal'
-      ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
-      : 'bg-pink-500/20 text-pink-300 border-pink-500/30';
-
-  return (
-    <div className="bg-zinc-900/70 border border-zinc-800/80 rounded-xl p-3.5 flex items-center justify-between gap-3">
-      <div className="flex items-start gap-3 min-w-0">
-        <div
-          className={`p-2.5 rounded-xl mt-0.5 shrink-0 ${
-            isReceita
-              ? 'bg-emerald-500/15 text-emerald-400'
-              : isPoupanca
-              ? 'bg-sky-500/15 text-sky-400'
-              : 'bg-rose-500/15 text-rose-400'
-          }`}
-        >
-          {isReceita ? (
-            <TrendingUp size={18} />
-          ) : isPoupanca ? (
-            <PiggyBank size={18} />
-          ) : (
-            <TrendingDown size={18} />
-          )}
-        </div>
-
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <p className="font-semibold text-sm text-zinc-100 truncate">{transacao.local}</p>
-            <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-semibold border ${corBadgePessoa}`}>
-              {transacao.responsavel}
-            </span>
-            {transacao.parcelaInfo && (
-              <span className="text-[10px] bg-zinc-800 text-zinc-300 px-1.5 py-0.5 rounded font-semibold">
-                {transacao.parcelaInfo}
-              </span>
-            )}
-            {transacao.pendenteSync && (
-              <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded font-semibold">
-                Sincronizando...
-              </span>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-zinc-400 mt-1">
-            <span className="flex items-center gap-1">
-              <MapPin size={11} /> {transacao.categoria}
-            </span>
-            <span className="flex items-center gap-1">
-              <Calendar size={11} /> {formatarDataBR(transacao.data)}
-            </span>
-            <span className="flex items-center gap-1">
-              <CreditCard size={11} /> {transacao.metodoPagamento}
-            </span>
-          </div>
-
-          {transacao.tags.length > 0 && (
-            <div className="flex flex-wrap gap-1 mt-1.5">
-              {transacao.tags.map((tag, i) => (
-                <span
-                  key={i}
-                  className="text-[10px] bg-zinc-800 text-zinc-300 px-1.5 py-0.5 rounded-md flex items-center gap-0.5"
-                >
-                  <Tag size={9} /> {tag}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="flex flex-col items-end shrink-0">
-        <span
-          className={`font-bold text-sm ${
-            isReceita ? 'text-emerald-400' : isPoupanca ? 'text-sky-400' : 'text-rose-400'
-          }`}
-        >
-          {isReceita ? '+' : '-'} {formatarMoeda(transacao.valor)}
-        </span>
-        <button
-          onClick={() => onExcluir(transacao.id)}
-          className="text-zinc-600 hover:text-rose-400 p-1 mt-1 transition"
-        >
-          <Trash2 size={14} />
-        </button>
+        <ModalConfigCasal
+          aberto={modalConfigAberto}
+          onFechar={() => setModalConfigAberto(false)}
+          pessoa1={pessoa1}
+          pessoa2={pessoa2}
+          onSalvarNomes={(novoP1, novoP2) => salvarConfigCasal(metaPoupanca, novoP1, novoP2)}
+        />
       </div>
     </div>
   );

@@ -169,7 +169,7 @@ export default function App() {
       .subscribe();
 
     return () => {
-      supabase?.removeChannel(canal);
+      supabase.removeChannel(canal);
     };
   }, []);
 
@@ -408,12 +408,11 @@ export default function App() {
   ];
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col md:flex-row font-sans selection:bg-emerald-500 selection:text-zinc-950">
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col md:flex-row font-sans selection:bg-emerald-500 selection:text-zinc-950 overflow-x-hidden w-full">
       
       {/* ==================== SIDEBAR DESKTOP (PC) ==================== */}
       <aside className="hidden md:flex md:w-64 lg:w-72 md:flex-col md:fixed md:inset-y-0 bg-zinc-900/60 border-r border-zinc-800/80 p-5 justify-between z-30">
         <div className="space-y-6">
-          {/* LOGO */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
@@ -428,14 +427,13 @@ export default function App() {
             </div>
             <button
               onClick={() => setModalConfigAberto(true)}
-              className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white transition"
+              className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white transition cursor-pointer"
               title="Configurar nomes do casal"
             >
               <Settings size={16} />
             </button>
           </div>
 
-          {/* BOTÃO NOVO LANÇAMENTO NO PC */}
           <button
             onClick={() => setModalAberto(true)}
             className="w-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold py-3 px-4 rounded-xl text-sm shadow-lg shadow-emerald-500/15 flex items-center justify-center gap-2 transition cursor-pointer"
@@ -444,7 +442,6 @@ export default function App() {
             Novo Lançamento
           </button>
 
-          {/* MENU DE NAVEGAÇÃO DESKTOP */}
           <nav className="space-y-1.5">
             {itensMenu.map((item) => {
               const Icone = item.icone;
@@ -453,7 +450,7 @@ export default function App() {
                 <button
                   key={item.id}
                   onClick={() => setAbaAtiva(item.id)}
-                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition ${
+                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition cursor-pointer ${
                     ativo
                       ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-semibold'
                       : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50'
@@ -467,11 +464,10 @@ export default function App() {
           </nav>
         </div>
 
-        {/* RODAPÉ DA SIDEBAR: STATUS DA NUVEM */}
         <div className="pt-4 border-t border-zinc-800/80 space-y-2">
           <button
             onClick={carregarDadosNuvem}
-            className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-zinc-300 hover:border-zinc-700 transition"
+            className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-zinc-300 hover:border-zinc-700 transition cursor-pointer"
           >
             <span className="flex items-center gap-2">
               <RefreshCw size={13} className={sincronizando ? 'animate-spin text-emerald-400' : 'text-emerald-400'} />
@@ -486,19 +482,19 @@ export default function App() {
         </div>
       </aside>
 
-      {/* ==================== ÁREA PRINCIPAL (MOBILE + PC) ==================== */}
-      <div className="flex-1 md:pl-64 lg:pl-72 flex flex-col min-h-screen pb-24 md:pb-10">
+      {/* ==================== ÁREA PRINCIPAL ==================== */}
+      <div className="flex-1 md:pl-64 lg:pl-72 flex flex-col min-h-screen pb-28 md:pb-10 w-full overflow-x-hidden">
         
         {/* HEADER RESPONSIVO */}
-        <header className="sticky top-0 z-20 bg-zinc-950/90 backdrop-blur-md border-b border-zinc-800/80 px-4 md:px-8 py-3">
-          <div className="max-w-6xl mx-auto flex flex-col gap-3">
+        <header className="sticky top-0 z-20 bg-zinc-950/90 backdrop-blur-md border-b border-zinc-800/80 px-4 md:px-8 py-3 w-full">
+          <div className="max-w-6xl mx-auto flex flex-col gap-3 w-full">
             <div className="flex items-center justify-between gap-2">
-              {/* LOGO VISÍVEL APENAS NO MOBILE */}
+              {/* LOGO MOBILE */}
               <div className="flex items-center gap-2 md:hidden">
-                <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+                <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shrink-0">
                   <Wallet size={17} />
                 </div>
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1.5 flex-wrap">
                   <span className="font-bold tracking-tight text-sm text-zinc-100">
                     NossoFinanceiro
                   </span>
@@ -516,28 +512,27 @@ export default function App() {
                 </div>
               </div>
 
-              {/* TÍTULO DA SEÇÃO NO DESKTOP */}
               <div className="hidden md:block">
                 <h1 className="text-lg font-bold text-white">
                   {itensMenu.find((i) => i.id === abaAtiva)?.label}
                 </h1>
               </div>
 
-              {/* SELETOR DE MÊS E ENGRENAGEM */}
-              <div className="flex items-center gap-2 ml-auto">
-                <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-full px-2 py-1">
+              {/* SELETOR DE MÊS E ENGRENAGEM MOBILE */}
+              <div className="flex items-center gap-2 ml-auto shrink-0">
+                <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-full px-1.5 py-1">
                   <button
                     onClick={() => mudarMes(-1)}
-                    className="p-1 text-zinc-400 hover:text-white transition"
+                    className="p-1 text-zinc-400 hover:text-white transition cursor-pointer"
                   >
                     <ChevronLeft size={16} />
                   </button>
-                  <span className="text-xs md:text-sm font-medium px-2 min-w-[115px] md:min-w-[140px] text-center">
+                  <span className="text-xs md:text-sm font-medium px-1.5 min-w-[105px] md:min-w-[140px] text-center truncate">
                     {nomeMesAno(mesSelecionado)}
                   </span>
                   <button
                     onClick={() => mudarMes(1)}
-                    className="p-1 text-zinc-400 hover:text-white transition"
+                    className="p-1 text-zinc-400 hover:text-white transition cursor-pointer"
                   >
                     <ChevronRight size={16} />
                   </button>
@@ -545,7 +540,7 @@ export default function App() {
 
                 <button
                   onClick={() => setModalConfigAberto(true)}
-                  className="md:hidden p-2 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white"
+                  className="md:hidden p-2 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white shrink-0 cursor-pointer"
                 >
                   <Settings size={15} />
                 </button>
@@ -559,20 +554,20 @@ export default function App() {
                 </span>
                 <button
                   onClick={carregarDadosNuvem}
-                  className="underline font-semibold shrink-0 text-amber-200"
+                  className="underline font-semibold shrink-0 text-amber-200 cursor-pointer"
                 >
                   Reenviar
                 </button>
               </div>
             )}
 
-            {/* FILTRO DE VISÃO DO CASAL */}
-            <div className="grid grid-cols-4 gap-1.5 bg-zinc-900/90 p-1 rounded-xl border border-zinc-800/80 max-w-xl">
+            {/* FILTRO DO CASAL */}
+            <div className="grid grid-cols-4 gap-1.5 bg-zinc-900/90 p-1 rounded-xl border border-zinc-800/80 w-full">
               {(['Todos', pessoa1, pessoa2, 'Casal'] as const).map((item) => (
                 <button
                   key={item}
                   onClick={() => setFiltroPessoaGlobal(item)}
-                  className={`py-1.5 rounded-lg text-xs font-semibold transition truncate px-2 cursor-pointer ${
+                  className={`py-1.5 rounded-lg text-xs font-semibold transition truncate px-1 text-center cursor-pointer ${
                     filtroPessoaGlobal === item
                       ? 'bg-emerald-500 text-zinc-950 shadow'
                       : 'text-zinc-400 hover:text-zinc-200'
@@ -585,16 +580,14 @@ export default function App() {
           </div>
         </header>
 
-        {/* CONTEÚDO CENTRALIZADO COM LARGURA MÁXIMA PARA DESKTOP */}
+        {/* CONTEÚDO CENTRAL */}
         <main className="flex-1 px-4 md:px-8 py-5 max-w-6xl w-full mx-auto space-y-6">
           
-          {/* ==================== ABA 1: HOME ==================== */}
+          {/* ABA 1: HOME */}
           {abaAtiva === 'home' && (
             <div className="space-y-6">
-              {/* GRID SUPERIOR: SALDO + RESUMO DO CASAL LADO A LADO NO PC */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
                 
-                {/* CARD PRINCIPAL (7 COLUNAS NO PC) */}
                 <div className="lg:col-span-7 bg-gradient-to-br from-zinc-900 via-zinc-900 to-emerald-950/40 border border-zinc-800 rounded-2xl p-5 md:p-6 shadow-lg flex flex-col justify-between">
                   <div>
                     <div className="flex items-center justify-between">
@@ -612,40 +605,39 @@ export default function App() {
                     </h2>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-3 mt-5 pt-4 border-t border-zinc-800/80">
-                    <div className="bg-zinc-950/60 p-3 rounded-xl border border-zinc-800/60">
+                  <div className="grid grid-cols-3 gap-2.5 mt-5 pt-4 border-t border-zinc-800/80">
+                    <div className="bg-zinc-950/60 p-2.5 md:p-3 rounded-xl border border-zinc-800/60">
                       <div className="flex items-center gap-1 text-emerald-400 text-xs font-medium">
-                        <TrendingUp size={14} />
+                        <TrendingUp size={13} />
                         <span>Entradas</span>
                       </div>
-                      <p className="text-sm md:text-base font-bold mt-1 text-zinc-100 truncate">
+                      <p className="text-xs md:text-base font-bold mt-1 text-zinc-100 truncate">
                         {formatarMoeda(resumoMes.receitas)}
                       </p>
                     </div>
 
-                    <div className="bg-zinc-950/60 p-3 rounded-xl border border-zinc-800/60">
+                    <div className="bg-zinc-950/60 p-2.5 md:p-3 rounded-xl border border-zinc-800/60">
                       <div className="flex items-center gap-1 text-rose-400 text-xs font-medium">
-                        <TrendingDown size={14} />
+                        <TrendingDown size={13} />
                         <span>Gastos</span>
                       </div>
-                      <p className="text-sm md:text-base font-bold mt-1 text-zinc-100 truncate">
+                      <p className="text-xs md:text-base font-bold mt-1 text-zinc-100 truncate">
                         {formatarMoeda(resumoMes.despesas)}
                       </p>
                     </div>
 
-                    <div className="bg-zinc-950/60 p-3 rounded-xl border border-zinc-800/60">
+                    <div className="bg-zinc-950/60 p-2.5 md:p-3 rounded-xl border border-zinc-800/60">
                       <div className="flex items-center gap-1 text-sky-400 text-xs font-medium">
-                        <PiggyBank size={14} />
+                        <PiggyBank size={13} />
                         <span>Guardado</span>
                       </div>
-                      <p className="text-sm md:text-base font-bold mt-1 text-zinc-100 truncate">
+                      <p className="text-xs md:text-base font-bold mt-1 text-zinc-100 truncate">
                         {formatarMoeda(resumoMes.poupadoMes)}
                       </p>
                     </div>
                   </div>
                 </div>
 
-                {/* DIVISÃO DE GASTOS NO MÊS (5 COLUNAS NO PC) */}
                 <div className="lg:col-span-5 bg-zinc-900/60 border border-zinc-800/80 rounded-2xl p-5 flex flex-col justify-between space-y-4">
                   <div>
                     <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
@@ -656,28 +648,28 @@ export default function App() {
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-2.5 text-center">
-                    <div className="bg-zinc-950/70 border border-zinc-800/70 rounded-xl p-3">
-                      <span className="text-xs text-indigo-400 font-semibold block truncate">
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div className="bg-zinc-950/70 border border-zinc-800/70 rounded-xl p-2.5">
+                      <span className="text-[11px] text-indigo-400 font-semibold block truncate">
                         {pessoa1}
                       </span>
-                      <span className="text-sm font-bold text-zinc-100 mt-1 block">
+                      <span className="text-xs md:text-sm font-bold text-zinc-100 mt-1 block truncate">
                         {formatarMoeda(resumoPorPessoa.p1Gastos)}
                       </span>
                     </div>
-                    <div className="bg-zinc-950/70 border border-zinc-800/70 rounded-xl p-3">
-                      <span className="text-xs text-pink-400 font-semibold block truncate">
+                    <div className="bg-zinc-950/70 border border-zinc-800/70 rounded-xl p-2.5">
+                      <span className="text-[11px] text-pink-400 font-semibold block truncate">
                         {pessoa2}
                       </span>
-                      <span className="text-sm font-bold text-zinc-100 mt-1 block">
+                      <span className="text-xs md:text-sm font-bold text-zinc-100 mt-1 block truncate">
                         {formatarMoeda(resumoPorPessoa.p2Gastos)}
                       </span>
                     </div>
-                    <div className="bg-zinc-950/70 border border-zinc-800/70 rounded-xl p-3">
-                      <span className="text-xs text-amber-400 font-semibold block truncate">
-                        Ambos/Casal
+                    <div className="bg-zinc-950/70 border border-zinc-800/70 rounded-xl p-2.5">
+                      <span className="text-[11px] text-amber-400 font-semibold block truncate">
+                        Casal
                       </span>
-                      <span className="text-sm font-bold text-zinc-100 mt-1 block">
+                      <span className="text-xs md:text-sm font-bold text-zinc-100 mt-1 block truncate">
                         {formatarMoeda(resumoPorPessoa.casalGastos)}
                       </span>
                     </div>
@@ -688,19 +680,18 @@ export default function App() {
                     className="bg-sky-950/25 border border-sky-900/40 rounded-xl p-3 flex items-center justify-between cursor-pointer hover:bg-sky-950/40 transition"
                   >
                     <div className="flex items-center gap-2.5">
-                      <PiggyBank size={18} className="text-sky-400" />
-                      <span className="text-xs text-sky-200 font-medium">
-                        Poupança Total Acumulada:
+                      <PiggyBank size={18} className="text-sky-400 shrink-0" />
+                      <span className="text-xs text-sky-200 font-medium truncate">
+                        Poupança Total:
                       </span>
                     </div>
-                    <strong className="text-sm text-sky-300">
+                    <strong className="text-xs md:text-sm text-sky-300 shrink-0">
                       {formatarMoeda(totalPoupancaAcumulada)}
                     </strong>
                   </div>
                 </div>
               </div>
 
-              {/* LISTA DE LANÇAMENTOS EM 1 COLUNA NO MOBILE E 2 COLUNAS NO PC */}
               <div>
                 <div className="flex items-center justify-between mb-3">
                   <h2 className="text-sm md:text-base font-semibold text-zinc-200">
@@ -708,7 +699,7 @@ export default function App() {
                   </h2>
                   <button
                     onClick={() => setAbaAtiva('extrato')}
-                    className="text-xs md:text-sm text-emerald-400 hover:underline"
+                    className="text-xs md:text-sm text-emerald-400 hover:underline cursor-pointer"
                   >
                     Pesquisar / Filtrar
                   </button>
@@ -718,7 +709,7 @@ export default function App() {
                   <div className="text-center py-12 bg-zinc-900/40 border border-zinc-800/60 rounded-2xl">
                     <p className="text-sm text-zinc-400">Nenhum lançamento neste mês.</p>
                     <p className="text-xs text-zinc-500 mt-1">
-                      Use o botão "+ Novo Lançamento" para registrar.
+                      Use o botão central "+" para registrar.
                     </p>
                   </div>
                 ) : (
@@ -737,7 +728,7 @@ export default function App() {
             </div>
           )}
 
-          {/* ==================== ABA 2: EXTRATO ==================== */}
+          {/* ABA 2: EXTRATO */}
           {abaAtiva === 'extrato' && (
             <div className="space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -748,13 +739,12 @@ export default function App() {
                   </p>
                 </div>
 
-                {/* FILTROS RÁPIDOS */}
                 <div className="flex gap-2 overflow-x-auto pb-1">
                   {(['todos', 'despesa', 'receita', 'poupanca'] as const).map((tipo) => (
                     <button
                       key={tipo}
                       onClick={() => setFiltroTipo(tipo)}
-                      className={`px-3.5 py-1.5 rounded-full text-xs font-medium capitalize transition cursor-pointer ${
+                      className={`px-3.5 py-1.5 rounded-full text-xs font-medium capitalize transition cursor-pointer shrink-0 ${
                         filtroTipo === tipo
                           ? 'bg-emerald-500 text-zinc-950 font-semibold'
                           : 'bg-zinc-900 text-zinc-400 border border-zinc-800 hover:text-zinc-200'
@@ -790,7 +780,7 @@ export default function App() {
             </div>
           )}
 
-          {/* ==================== ABA 3: POUPANÇA & METAS ==================== */}
+          {/* ABA 3: POUPANÇA & METAS */}
           {abaAtiva === 'metas' && (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
               <div className="lg:col-span-5 bg-gradient-to-br from-sky-950/50 to-zinc-900 border border-sky-900/50 rounded-2xl p-5 h-fit">
@@ -804,7 +794,7 @@ export default function App() {
                       setNovaMetaInput(metaPoupanca.toString());
                       setEditandoMeta(!editandoMeta);
                     }}
-                    className="text-xs text-sky-400 hover:underline"
+                    className="text-xs text-sky-400 hover:underline cursor-pointer"
                   >
                     {editandoMeta ? 'Cancelar' : 'Editar Meta'}
                   </button>
@@ -824,7 +814,7 @@ export default function App() {
                       type="number"
                       value={novaMetaInput}
                       onChange={(e) => setNovaMetaInput(e.target.value)}
-                      className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm"
+                      className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white"
                     />
                     <button
                       onClick={() => {
@@ -835,7 +825,7 @@ export default function App() {
                         }
                         setEditandoMeta(false);
                       }}
-                      className="bg-sky-500 text-zinc-950 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1"
+                      className="bg-sky-500 text-zinc-950 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer"
                     >
                       <Check size={14} /> Salvar
                     </button>
@@ -853,16 +843,16 @@ export default function App() {
 
                 <div className="grid grid-cols-3 gap-2 mt-5 pt-4 border-t border-sky-900/40 text-center text-xs">
                   <div>
-                    <span className="text-zinc-400 block truncate">{pessoa1} (Mês)</span>
-                    <strong className="text-sky-300">{formatarMoeda(resumoPorPessoa.p1Poupanca)}</strong>
+                    <span className="text-zinc-400 block truncate">{pessoa1}</span>
+                    <strong className="text-sky-300 block truncate">{formatarMoeda(resumoPorPessoa.p1Poupanca)}</strong>
                   </div>
                   <div>
-                    <span className="text-zinc-400 block truncate">{pessoa2} (Mês)</span>
-                    <strong className="text-sky-300">{formatarMoeda(resumoPorPessoa.p2Poupanca)}</strong>
+                    <span className="text-zinc-400 block truncate">{pessoa2}</span>
+                    <strong className="text-sky-300 block truncate">{formatarMoeda(resumoPorPessoa.p2Poupanca)}</strong>
                   </div>
                   <div>
-                    <span className="text-zinc-400 block">Juntos (Mês)</span>
-                    <strong className="text-sky-300">{formatarMoeda(resumoPorPessoa.casalPoupanca)}</strong>
+                    <span className="text-zinc-400 block truncate">Juntos</span>
+                    <strong className="text-sky-300 block truncate">{formatarMoeda(resumoPorPessoa.casalPoupanca)}</strong>
                   </div>
                 </div>
               </div>
@@ -910,7 +900,7 @@ export default function App() {
             </div>
           )}
 
-          {/* ==================== ABA 4: ANÁLISE ==================== */}
+          {/* ABA 4: ANÁLISE */}
           {abaAtiva === 'graficos' && (
             <div className="space-y-5 max-w-3xl">
               <h2 className="text-lg font-bold">Análise de Gastos por Categoria</h2>
@@ -943,22 +933,21 @@ export default function App() {
           )}
         </main>
 
-{/* ==================== BOTTOM NAVIGATION (APENAS MOBILE) ==================== */}
-        <nav className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800/80 pb-safe">
-          <div className="max-w-md mx-auto px-2 h-16 flex items-center justify-around relative">
+        {/* ==================== BOTTOM NAVIGATION MOBILE ==================== */}
+        <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800/80">
+          <div className="w-full px-3 h-16 flex items-center justify-between relative">
             <button
               onClick={() => setAbaAtiva('home')}
-              className={`flex flex-col items-center justify-center w-14 gap-1 text-[11px] transition ${
+              className={`flex flex-col items-center justify-center flex-1 h-full gap-1 text-[11px] transition cursor-pointer ${
                 abaAtiva === 'home' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
               }`}
             >
               <Home size={20} />
               <span>Início</span>
             </button>
-
             <button
               onClick={() => setAbaAtiva('extrato')}
-              className={`flex flex-col items-center justify-center w-14 gap-1 text-[11px] transition mr-6 ${
+              className={`flex flex-col items-center justify-center flex-1 h-full gap-1 text-[11px] transition mr-8 cursor-pointer ${
                 abaAtiva === 'extrato' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
               }`}
             >
@@ -966,27 +955,26 @@ export default function App() {
               <span>Extrato</span>
             </button>
 
-            {/* BOTÃO FLUTUANTE CENTRAL DE ADICIONAR */}
+            {/* BOTÃO FLUTUANTE CENTRAL */}
             <button
               onClick={() => setModalAberto(true)}
-              className="absolute left-1/2 -translate-x-1/2 -top-5 w-14 h-14 rounded-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 shadow-lg shadow-emerald-500/25 flex items-center justify-center transition transform active:scale-95 cursor-pointer"
+              className="absolute left-1/2 -translate-x-1/2 -top-5 w-14 h-14 rounded-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 shadow-lg shadow-emerald-500/25 flex items-center justify-center transition transform active:scale-95 cursor-pointer z-50"
             >
               <Plus size={28} strokeWidth={2.5} />
             </button>
 
             <button
               onClick={() => setAbaAtiva('metas')}
-              className={`flex flex-col items-center justify-center w-14 gap-1 text-[11px] transition ml-6 ${
+              className={`flex flex-col items-center justify-center flex-1 h-full gap-1 text-[11px] transition ml-8 cursor-pointer ${
                 abaAtiva === 'metas' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
               }`}
             >
               <Target size={20} />
               <span>Poupança</span>
             </button>
-
             <button
               onClick={() => setAbaAtiva('graficos')}
-              className={`flex flex-col items-center justify-center w-14 gap-1 text-[11px] transition ${
+              className={`flex flex-col items-center justify-center flex-1 h-full gap-1 text-[11px] transition cursor-pointer ${
                 abaAtiva === 'graficos' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
               }`}
             >

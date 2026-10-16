@@ -943,21 +943,22 @@ export default function App() {
           )}
         </main>
 
-        {/* ==================== BOTTOM NAVIGATION (APENAS MOBILE) ==================== */}
-        <nav className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800/80">
-          <div className="max-w-md mx-auto px-4 h-16 flex items-center justify-between relative">
+{/* ==================== BOTTOM NAVIGATION (APENAS MOBILE) ==================== */}
+        <nav className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800/80 pb-safe">
+          <div className="max-w-md mx-auto px-2 h-16 flex items-center justify-around relative">
             <button
               onClick={() => setAbaAtiva('home')}
-              className={`flex flex-col items-center gap-1 text-[11px] ${
+              className={`flex flex-col items-center justify-center w-14 gap-1 text-[11px] transition ${
                 abaAtiva === 'home' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
               }`}
             >
               <Home size={20} />
               <span>Início</span>
             </button>
+
             <button
               onClick={() => setAbaAtiva('extrato')}
-              className={`flex flex-col items-center gap-1 text-[11px] mr-6 ${
+              className={`flex flex-col items-center justify-center w-14 gap-1 text-[11px] transition mr-6 ${
                 abaAtiva === 'extrato' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
               }`}
             >
@@ -965,25 +966,27 @@ export default function App() {
               <span>Extrato</span>
             </button>
 
+            {/* BOTÃO FLUTUANTE CENTRAL DE ADICIONAR */}
             <button
               onClick={() => setModalAberto(true)}
-              className="absolute left-1/2 -translate-x-1/2 -top-5 w-14 h-14 rounded-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 shadow-lg shadow-emerald-500/25 flex items-center justify-center transition transform active:scale-95"
+              className="absolute left-1/2 -translate-x-1/2 -top-5 w-14 h-14 rounded-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 shadow-lg shadow-emerald-500/25 flex items-center justify-center transition transform active:scale-95 cursor-pointer"
             >
               <Plus size={28} strokeWidth={2.5} />
             </button>
 
             <button
               onClick={() => setAbaAtiva('metas')}
-              className={`flex flex-col items-center gap-1 text-[11px] ml-6 ${
+              className={`flex flex-col items-center justify-center w-14 gap-1 text-[11px] transition ml-6 ${
                 abaAtiva === 'metas' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
               }`}
             >
               <Target size={20} />
               <span>Poupança</span>
             </button>
+
             <button
               onClick={() => setAbaAtiva('graficos')}
-              className={`flex flex-col items-center gap-1 text-[11px] ${
+              className={`flex flex-col items-center justify-center w-14 gap-1 text-[11px] transition ${
                 abaAtiva === 'graficos' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
               }`}
             >

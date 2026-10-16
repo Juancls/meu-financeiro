@@ -22,13 +22,15 @@ import {
   User,
   Cloud,
   CloudOff,
+  RefreshCw,
   Settings,
   X,
-  Check
+  Check,
+  AlertCircle
 } from 'lucide-react';
 
 // ============================================================================
-// CONFIGURAÇÃO DO SUPABASE (SUAS CHAVES JÁ CONFIGURADAS)
+// CONFIGURAÇÃO DO SUPABASE
 // ============================================================================
 const SUPABASE_URL = 'https://lbnjohkoqqqbfiwgtfta.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_NvA1Efn5PmLID6MBOWq7wQ_kvPIJhaU';
@@ -37,6 +39,17 @@ const supabase =
   SUPABASE_URL && SUPABASE_ANON_KEY
     ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
     : null;
+
+// --- FUNÇÕES DE DATA NO FUSO HORÁRIO LOCAL (BRASIL) ---
+const obterDataHojeLocal = () => {
+  const hoje = new Date();
+  const ano = hoje.getFullYear();
+  const mes = String(hoje.getMonth() + 1).padStart(2, '0');
+  const dia = String(hoje.getDate()).padStart(2, '0');
+  return `${ano}-${mes}-${dia}`;
+};
+
+const obterMesAtualLocal = () => obterDataHojeLocal().slice(0, 7);
 
 // --- TIPAGENS ---
 type TransactionType = 'despesa' | 'receita' | 'poupanca';
@@ -52,7 +65,8 @@ interface Transaction {
   tags: string[];
   metodoPagamento: PaymentMethod;
   parcelaInfo?: string;
-  responsavel: string; // Nome da pessoa 1, pessoa 2 ou 'Casal'
+  responsavel: string;
+  pendenteSync?: boolean; // Garante que nenhum gasto suma se a internet falhar
 }
 
 interface CategoryBudget {
@@ -73,23 +87,30 @@ const ORCAMENTOS_INICIAIS: CategoryBudget[] = [
 ];
 
 export default function App() {
-  // --- NOMES DO CASAL (EDITÁVEIS NO APP) ---
+  // --- NOMES DO CASAL ---
   const [pessoa1, setPessoa1] = useState(() => localStorage.getItem('@financas:pessoa1') || 'Juan');
   const [pessoa2, setPessoa2] = useState(() => localStorage.getItem('@financas:pessoa2') || 'Noiva');
   const [modalConfigAberto, setModalConfigAberto] = useState(false);
 
-  // --- ESTADOS DE NAVEGAÇÃO E FILTRO DE PESSOA ---
+  // --- ESTADOS DE NAVEGAÇÃO ---
   const [abaAtiva, setAbaAtiva] = useState<'home' | 'extrato' | 'metas' | 'graficos'>('home');
   const [modalAberto, setModalAberto] = useState(false);
   const [filtroPessoaGlobal, setFiltroPessoaGlobal] = useState<string>('Todos');
-  const [mesSelecionado, setMesSelecionado] = useState(() => new Date().toISOString().slice(0, 7));
+  const [mesSelecionado, setMesSelecionado] = useState(() => obterMesAtualLocal());
   const [sincronizando, setSincronizando] = useState(false);
+  const [salvando, setSalvando] = useState(false);
   const [erroNuvem, setErroNuvem] = useState<string | null>(null);
 
   // --- DADOS ---
   const [transacoes, setTransacoes] = useState<Transaction[]>(() => {
     const salvo = localStorage.getItem('@financas:transacoes_casal');
-    if (salvo) return JSON.parse(salvo);
+    if (salvo) {
+      try {
+        return JSON.parse(salvo);
+      } catch {
+        return [];
+      }
+    }
     return [];
   });
 
@@ -105,7 +126,7 @@ export default function App() {
   const [responsavelForm, setResponsavelForm] = useState<string>(pessoa1);
   const [valorForm, setValorForm] = useState('');
   const [localForm, setLocalForm] = useState('');
-  const [dataForm, setDataForm] = useState(() => new Date().toISOString().slice(0, 10));
+  const [dataForm, setDataForm] = useState(() => obterDataHojeLocal());
   const [categoriaForm, setCategoriaForm] = useState('Comida');
   const [tagsForm, setTagsForm] = useState('');
   const [metodoForm, setMetodoForm] = useState<PaymentMethod>('Pix/Débito');
@@ -120,61 +141,95 @@ export default function App() {
   const [novaMetaInput, setNovaMetaInput] = useState(metaPoupanca.toString());
 
   // ============================================================================
-  // SINCRONIZAÇÃO COM SUPABASE (TEMPO REAL ENTRE OS DOIS CELULARES)
+  // SINCRONIZAÇÃO INTELIGENTE COM SUPABASE (NUNCA APAGA DADOS LOCAIS PENDENTES)
   // ============================================================================
   const carregarDadosNuvem = async () => {
     if (!supabase) return;
     setSincronizando(true);
 
-    const { data: transData, error: transError } = await supabase
-      .from('transacoes')
-      .select('*')
-      .order('data', { ascending: false });
+    try {
+      // 1. Primeiro verifica se há transações salvas no celular que falharam ao subir antes
+      const localSalvo = localStorage.getItem('@financas:transacoes_casal');
+      const listaLocal: Transaction[] = localSalvo ? JSON.parse(localSalvo) : [];
+      const pendentes = listaLocal.filter((t) => t.pendenteSync);
 
-    if (transError) {
-      console.error('Erro ao buscar transações:', transError.message);
-      setErroNuvem('Tabelas ainda não criadas no SQL Editor do Supabase.');
+      if (pendentes.length > 0) {
+        const payloadPendentes = pendentes.map((t) => ({
+          id: t.id,
+          tipo: t.tipo,
+          valor: t.valor,
+          data: t.data,
+          local: t.local,
+          categoria: t.categoria,
+          tags: t.tags,
+          metodo_pagamento: t.metodoPagamento,
+          parcela_info: t.parcelaInfo || null,
+          responsavel: t.responsavel,
+        }));
+        await supabase.from('transacoes').upsert(payloadPendentes);
+      }
+
+      // 2. Busca todas as transações da nuvem (sem limite curto)
+      const { data: transData, error: transError } = await supabase
+        .from('transacoes')
+        .select('*')
+        .order('data', { ascending: false })
+        .order('created_at', { ascending: false })
+        .limit(2000);
+
+      if (transError) {
+        console.error('Erro ao buscar transações:', transError.message);
+        setErroNuvem(`Aviso de sincronização: ${transError.message}`);
+        setSincronizando(false);
+        return;
+      }
+
+      setErroNuvem(null);
+
+      if (transData) {
+        const daNuvem: Transaction[] = transData.map((row: any) => ({
+          id: String(row.id),
+          tipo: row.tipo,
+          valor: Number(row.valor),
+          data: row.data,
+          local: row.local,
+          categoria: row.categoria,
+          tags: Array.isArray(row.tags) ? row.tags : [],
+          metodoPagamento: row.metodo_pagamento,
+          parcelaInfo: row.parcela_info || undefined,
+          responsavel: row.responsavel,
+          pendenteSync: false,
+        }));
+
+        // Mescla: mantém qualquer item local que ainda esteja pendente e não tenha chegado na nuvem
+        const idsNuvem = new Set(daNuvem.map((t) => t.id));
+        const aindaPendentes = pendentes.filter((t) => !idsNuvem.has(t.id));
+
+        setTransacoes([...aindaPendentes, ...daNuvem]);
+      }
+
+      const { data: configData } = await supabase
+        .from('config_casal')
+        .select('*')
+        .eq('id', 1)
+        .single();
+
+      if (configData) {
+        setMetaPoupanca(Number(configData.meta_poupanca));
+        if (configData.pessoa1) setPessoa1(configData.pessoa1);
+        if (configData.pessoa2) setPessoa2(configData.pessoa2);
+      }
+    } catch (err: any) {
+      setErroNuvem('Sem conexão no momento. Seus gastos estão salvos no aparelho.');
+    } finally {
       setSincronizando(false);
-      return;
     }
-
-    setErroNuvem(null);
-
-    if (transData) {
-      const formatadas: Transaction[] = transData.map((row: any) => ({
-        id: row.id,
-        tipo: row.tipo,
-        valor: Number(row.valor),
-        data: row.data,
-        local: row.local,
-        categoria: row.categoria,
-        tags: row.tags || [],
-        metodoPagamento: row.metodo_pagamento,
-        parcelaInfo: row.parcela_info || undefined,
-        responsavel: row.responsavel,
-      }));
-      setTransacoes(formatadas);
-    }
-
-    const { data: configData } = await supabase
-      .from('config_casal')
-      .select('*')
-      .eq('id', 1)
-      .single();
-
-    if (configData) {
-      setMetaPoupanca(Number(configData.meta_poupanca));
-      setPessoa1(configData.pessoa1);
-      setPessoa2(configData.pessoa2);
-    }
-    setSincronizando(false);
   };
 
   useEffect(() => {
     if (!supabase) return;
     carregarDadosNuvem();
 
-    // Escuta alterações feitas pela noiva ou por você em tempo real
     const canal = supabase
       .channel('realtime-casal')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transacoes' }, () => {
@@ -190,7 +245,7 @@ export default function App() {
     };
   }, []);
 
-  // Backup sempre atualizado no LocalStorage também
+  // Salva sempre no LocalStorage
   useEffect(() => {
     localStorage.setItem('@financas:transacoes_casal', JSON.stringify(transacoes));
   }, [transacoes]);
@@ -206,13 +261,21 @@ export default function App() {
     if (tipoForm === 'poupanca') setCategoriaForm(CATEGORIAS_POUPANCA[0]);
   }, [tipoForm]);
 
+  // Garante que o responsável selecionado no modal sempre exista caso o nome tenha mudado
+  useEffect(() => {
+    if (responsavelForm !== pessoa1 && responsavelForm !== pessoa2 && responsavelForm !== 'Casal') {
+      setResponsavelForm(pessoa1);
+    }
+  }, [pessoa1, pessoa2]);
+
   // --- FUNÇÕES UTILITÁRIAS ---
   const formatarMoeda = (valor: number) =>
     valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
   const formatarDataBR = (dataISO: string) => {
-    const [ano, mes, dia] = dataISO.split('-');
-    return `${dia}/${mes}/${ano}`;
+    const partes = dataISO.split('-');
+    if (partes.length !== 3) return dataISO;
+    return `${partes[2]}/${partes[1]}/${partes[0]}`;
   };
 
   const nomeMesAno = (anoMes: string) => {
@@ -276,11 +339,23 @@ export default function App() {
       .reduce((acc, t) => acc + t.valor, 0);
   }, [transacoes, filtroPessoaGlobal]);
 
-  // --- ADICIONAR TRANSAÇÃO ---
+  // --- ADICIONAR TRANSAÇÃO COM PROTEÇÃO TOTAL CONTRA PERDA ---
   const handleAdicionarTransacao = async (e: React.FormEvent) => {
     e.preventDefault();
-    const valorNumerico = parseFloat(valorForm.replace(',', '.'));
-    if (!valorNumerico || valorNumerico <= 0 || !localForm.trim()) return;
+    if (salvando) return;
+
+    // Aceita tanto 12,50 quanto 12.50 ou 1.200,50
+    const valorLimpo = valorForm.includes(',')
+      ? valorForm.replace(/\./g, '').replace(',', '.')
+      : valorForm;
+    const valorNumerico = parseFloat(valorLimpo);
+
+    if (isNaN(valorNumerico) || valorNumerico <= 0 || !localForm.trim()) {
+      alert('Preencha um valor válido e a descrição do lançamento.');
+      return;
+    }
+
+    setSalvando(true);
 
     const listaTags = tagsForm
       .split(',')
@@ -293,6 +368,7 @@ export default function App() {
       tipoForm === 'despesa' && metodoForm === 'Cartão de Crédito' ? Math.max(1, parcelasForm) : 1;
     const valorParcela = Number((valorNumerico / numParcelas).toFixed(2));
     const [anoBase, mesBase, diaBase] = dataForm.split('-').map(Number);
+    const sufixoAleatorio = Math.random().toString(36).substring(2, 7);
 
     for (let i = 0; i < numParcelas; i++) {
       const dataParcela = new Date(anoBase, mesBase - 1 + i, diaBase);
@@ -302,7 +378,7 @@ export default function App() {
       )}-${String(dataParcela.getDate()).padStart(2, '0')}`;
 
       novasTransacoes.push({
-        id: `${Date.now()}-${i}`,
+        id: `${Date.now()}-${sufixoAleatorio}-${i}`,
         tipo: tipoForm,
         valor: valorParcela,
         data: dataStr,
@@ -312,13 +388,20 @@ export default function App() {
         metodoPagamento: metodoForm,
         parcelaInfo: numParcelas > 1 ? `${i + 1}/${numParcelas}` : undefined,
         responsavel: responsavelForm,
+        pendenteSync: true, // Marcado como pendente até o Supabase confirmar!
       });
     }
 
-    // Atualiza na hora na tela
+    // 1. Salva imediatamente no estado e no LocalStorage (para nunca perder)
     setTransacoes((prev) => [...novasTransacoes, ...prev]);
 
-    // Salva no Supabase
+    // Se a pessoa lançou um gasto de outro mês, muda a visão para o mês do gasto para ela ver na hora!
+    const mesDoLancamento = dataForm.slice(0, 7);
+    if (mesDoLancamento !== mesSelecionado) {
+      setMesSelecionado(mesDoLancamento);
+    }
+
+    // 2. Envia para o Supabase
     if (supabase) {
       const payload = novasTransacoes.map((t) => ({
         id: t.id,
@@ -332,12 +415,25 @@ export default function App() {
         parcela_info: t.parcelaInfo || null,
         responsavel: t.responsavel,
       }));
-      const { error } = await supabase.from('transacoes').insert(payload);
-      if (error) {
+
+      const { error } = await supabase.from('transacoes').upsert(payload);
+
+      if (!error) {
+        // Confirmado na nuvem! Remove a flag pendenteSync
+        const idsSalvos = new Set(novasTransacoes.map((t) => t.id));
+        setTransacoes((prev) =>
+          prev.map((t) => (idsSalvos.has(t.id) ? { ...t, pendenteSync: false } : t))
+        );
+        setErroNuvem(null);
+      } else {
         console.error('Erro ao salvar no Supabase:', error.message);
+        setErroNuvem(
+          `Salvo no celular, mas falhou ao enviar para nuvem (${error.message}). Clique no botão atualizar no topo.`
+        );
       }
     }
 
+    setSalvando(false);
     setValorForm('');
     setLocalForm('');
     setTagsForm('');
@@ -354,8 +450,41 @@ export default function App() {
 
   const salvarConfigCasal = async (novaMeta?: number, nP1?: string, nP2?: string) => {
     const metaFinal = novaMeta ?? metaPoupanca;
-    const p1Final = nP1 ?? pessoa1;
-    const p2Final = nP2 ?? pessoa2;
+    const p1Final = (nP1 ?? pessoa1).trim() || 'Juan';
+    const p2Final = (nP2 ?? pessoa2).trim() || 'Noiva';
+
+    const nomeAntigoP1 = localStorage.getItem('@financas:pessoa1') || 'Juan';
+    const nomeAntigoP2 = localStorage.getItem('@financas:pessoa2') || 'Noiva';
+
+    // Se mudou o nome na engrenagem, atualiza os lançamentos antigos para não sumirem do filtro!
+    if (nomeAntigoP1 !== p1Final || nomeAntigoP2 !== p2Final) {
+      setTransacoes((prev) =>
+        prev.map((t) => {
+          if (t.responsavel === nomeAntigoP1) return { ...t, responsavel: p1Final };
+          if (t.responsavel === nomeAntigoP2) return { ...t, responsavel: p2Final };
+          return t;
+        })
+      );
+
+      if (supabase) {
+        if (nomeAntigoP1 !== p1Final) {
+          await supabase
+            .from('transacoes')
+            .update({ responsavel: p1Final })
+            .eq('responsavel', nomeAntigoP1);
+        }
+        if (nomeAntigoP2 !== p2Final) {
+          await supabase
+            .from('transacoes')
+            .update({ responsavel: p2Final })
+            .eq('responsavel', nomeAntigoP2);
+        }
+      }
+    }
+
+    setPessoa1(p1Final);
+    setPessoa2(p2Final);
+    setFiltroPessoaGlobal('Todos');
 
     if (supabase) {
       await supabase.from('config_casal').upsert({
@@ -392,6 +521,8 @@ export default function App() {
       .sort((a, b) => b.total - a.total);
   }, [transacoesDoMes]);
 
+  const qtdPendentes = transacoes.filter((t) => t.pendenteSync).length;
+
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 pb-24 font-sans selection:bg-emerald-500 selection:text-zinc-950">
       <div className="max-w-md mx-auto min-h-screen bg-zinc-900/50 border-x border-zinc-800/60 flex flex-col">
@@ -406,15 +537,24 @@ export default function App() {
               <div>
                 <div className="flex items-center gap-1.5">
                   <span className="font-bold tracking-tight text-sm text-zinc-100">NossoFinanceiro</span>
-                  {supabase && !erroNuvem ? (
-                    <span className="flex items-center gap-1 text-[10px] bg-emerald-500/15 text-emerald-400 px-1.5 py-0.5 rounded-full">
-                      <Cloud size={10} /> {sincronizando ? 'Sync...' : 'Online'}
-                    </span>
-                  ) : (
-                    <span className="flex items-center gap-1 text-[10px] bg-amber-500/15 text-amber-400 px-1.5 py-0.5 rounded-full">
-                      <CloudOff size={10} /> Local
-                    </span>
-                  )}
+                  <button
+                    onClick={carregarDadosNuvem}
+                    title="Clique para forçar sincronização"
+                    className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full transition ${
+                      supabase && !erroNuvem && qtdPendentes === 0
+                        ? 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25'
+                        : 'bg-amber-500/20 text-amber-300'
+                    }`}
+                  >
+                    <RefreshCw size={10} className={sincronizando ? 'animate-spin' : ''} />
+                    {sincronizando
+                      ? 'Sincronizando...'
+                      : qtdPendentes > 0
+                      ? `${qtdPendentes} pendente(s)`
+                      : supabase && !erroNuvem
+                      ? 'Online'
+                      : 'Local'}
+                  </button>
                 </div>
               </div>
             </div>
@@ -444,12 +584,20 @@ export default function App() {
           </div>
 
           {erroNuvem && (
-            <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-2.5 py-1.5 text-[11px] text-amber-300">
-              ⚠️ {erroNuvem}
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-2.5 py-1.5 text-[11px] text-amber-300 flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1.5">
+                <AlertCircle size={13} className="shrink-0" /> {erroNuvem}
+              </span>
+              <button
+                onClick={carregarDadosNuvem}
+                className="underline font-semibold shrink-0 text-amber-200"
+              >
+                Reenviar
+              </button>
             </div>
           )}
 
-          {/* FILTRO DE VISÃO DO CASAL (TODOS / VOCÊ / NOIVA / CASAL) */}
+          {/* FILTRO DE VISÃO DO CASAL */}
           <div className="grid grid-cols-4 gap-1.5 bg-zinc-900/90 p-1 rounded-xl border border-zinc-800/80">
             {(['Todos', pessoa1, pessoa2, 'Casal'] as const).map((item) => (
               <button
@@ -553,15 +701,17 @@ export default function App() {
                 </div>
               </div>
 
-              {/* ÚLTIMAS TRANSAÇÕES */}
+              {/* TODOS OS LANÇAMENTOS DO MÊS (SEM ESCONDER APÓS O 6º) */}
               <div>
                 <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-sm font-semibold text-zinc-300">Últimos Lançamentos</h2>
+                  <h2 className="text-sm font-semibold text-zinc-300">
+                    Lançamentos do Mês ({transacoesDoMes.length})
+                  </h2>
                   <button
                     onClick={() => setAbaAtiva('extrato')}
                     className="text-xs text-emerald-400 hover:underline"
                   >
-                    Ver extrato completo
+                    Buscar / Filtrar
                   </button>
                 </div>
 
@@ -572,7 +722,7 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="space-y-2.5">
-                    {transacoesDoMes.slice(0, 6).map((t) => (
+                    {transacoesDoMes.map((t) => (
                       <CardTransacao
                         key={t.id}
                         transacao={t}
@@ -591,7 +741,10 @@ export default function App() {
           {/* ABA 2: EXTRATO */}
           {abaAtiva === 'extrato' && (
             <div className="space-y-4">
-              <h2 className="text-lg font-bold">Extrato Compartilhado</h2>
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold">Extrato Compartilhado</h2>
+                <span className="text-xs text-zinc-400">{transacoesFiltradas.length} registro(s)</span>
+              </div>
               <div className="relative">
                 <Search size={16} className="absolute left-3.5 top-3 text-zinc-500" />
                 <input
@@ -801,7 +954,10 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => setModalAberto(true)}
+              onClick={() => {
+                setDataForm(obterDataHojeLocal());
+                setModalAberto(true);
+              }}
               className="absolute left-1/2 -translate-x-1/2 -top-5 w-14 h-14 rounded-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 shadow-lg shadow-emerald-500/25 flex items-center justify-center transition transform active:scale-95"
             >
               <Plus size={28} strokeWidth={2.5} />
@@ -902,10 +1058,10 @@ export default function App() {
                   <div>
                     <label className="text-[11px] text-zinc-400 font-medium">Valor (R$)</label>
                     <input
-                      type="number"
-                      step="0.01"
+                      type="text"
+                      inputMode="decimal"
                       required
-                      placeholder="0,00"
+                      placeholder="Ex: 45,90"
                       value={valorForm}
                       onChange={(e) => setValorForm(e.target.value)}
                       className="w-full mt-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm font-bold text-white"
@@ -997,9 +1153,10 @@ export default function App() {
 
                 <button
                   type="submit"
-                  className="w-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold py-3 rounded-xl text-sm transition"
+                  disabled={salvando}
+                  className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-zinc-950 font-bold py-3 rounded-xl text-sm transition"
                 >
-                  Salvar Lançamento
+                  {salvando ? 'Salvando na nuvem...' : 'Salvar Lançamento'}
                 </button>
               </form>
             </div>
@@ -1042,7 +1199,7 @@ export default function App() {
                   }}
                   className="w-full bg-emerald-500 text-zinc-950 font-bold py-2.5 rounded-xl text-xs"
                 >
-                  Salvar Nomes
+                  Salvar e Atualizar Registros
                 </button>
               </div>
             </div>
@@ -1107,6 +1264,11 @@ function CardTransacao({
             {transacao.parcelaInfo && (
               <span className="text-[10px] bg-zinc-800 text-zinc-300 px-1.5 py-0.5 rounded font-semibold">
                 {transacao.parcelaInfo}
+              </span>
+            )}
+            {transacao.pendenteSync && (
+              <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded font-semibold">
+                Sincronizando...
               </span>
             )}
           </div>

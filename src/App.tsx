@@ -169,7 +169,7 @@ export default function App() {
       .subscribe();
 
     return () => {
-      supabase.removeChannel(canal);
+      supabase?.removeChannel(canal);
     };
   }, []);
 

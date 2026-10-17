@@ -1,6 +1,7 @@
 export type TransactionType = 'despesa' | 'receita' | 'poupanca';
 export type PaymentMethod = 'Pix/Débito' | 'Cartão de Crédito' | 'Dinheiro';
-export type ActiveTab = 'home' | 'extrato' | 'metas' | 'graficos';
+export type ActiveTab = 'home' | 'extrato' | 'metas' | 'enxoval' | 'graficos';
+export type PrioridadeItem = 'Alta' | 'Média' | 'Baixa';
 
 export interface Transaction {
   id: string;
@@ -16,10 +17,30 @@ export interface Transaction {
   pendenteSync?: boolean;
 }
 
+export interface EnxovalItem {
+  id: string;
+  comodo: string;
+  item: string;
+  quantidade: number;
+  valor: number;
+  prioridade: PrioridadeItem;
+  observacao: string;
+  comprado: boolean;
+}
+
 export interface CategoryBudget {
   categoria: string;
   limite: number;
 }
+
+export const COMODOS_PADRAO = [
+  'Cozinha',
+  'Quarto',
+  'Sala',
+  'Banheiro',
+  'Lavanderia / Área de Serviço',
+  'Outros',
+];
 
 export const CATEGORIAS_DESPESA = [
   'Comida',
@@ -49,7 +70,6 @@ export const ORCAMENTOS_INICIAIS: CategoryBudget[] = [
   { categoria: 'Contas Fixas', limite: 700 },
 ];
 
-// --- FUNÇÕES UTILITÁRIAS E DE DATA (FUSO BRASIL) ---
 export const obterDataHojeLocal = () => {
   const hoje = new Date();
   const ano = hoje.getFullYear();

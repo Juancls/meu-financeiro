@@ -7,16 +7,18 @@ import {
   CreditCard,
   Tag,
   Trash2,
+  Pencil,
 } from 'lucide-react';
 import { type Transaction, formatarMoeda, formatarDataBR } from '../types';
 
 interface CardTransacaoProps {
   transacao: Transaction;
   pessoa1: string;
+  onEditar: (transacao: Transaction) => void;
   onExcluir: (id: string) => void;
 }
 
-export function CardTransacao({ transacao, pessoa1, onExcluir }: CardTransacaoProps) {
+export function CardTransacao({ transacao, pessoa1, onEditar, onExcluir }: CardTransacaoProps) {
   const isReceita = transacao.tipo === 'receita';
   const isPoupanca = transacao.tipo === 'poupanca';
 
@@ -105,13 +107,23 @@ export function CardTransacao({ transacao, pessoa1, onExcluir }: CardTransacaoPr
         >
           {isReceita ? '+' : '-'} {formatarMoeda(transacao.valor)}
         </span>
-        <button
-          onClick={() => onExcluir(transacao.id)}
-          className="text-zinc-500 hover:text-rose-400 p-1.5 mt-1 transition rounded-lg hover:bg-zinc-800/60"
-          title="Excluir lançamento"
-        >
-          <Trash2 size={15} />
-        </button>
+
+        <div className="flex items-center gap-1 mt-1">
+          <button
+            onClick={() => onEditar(transacao)}
+            className="text-zinc-500 hover:text-emerald-400 p-1.5 transition rounded-lg hover:bg-zinc-800/60 cursor-pointer"
+            title="Editar lançamento"
+          >
+            <Pencil size={14} />
+          </button>
+          <button
+            onClick={() => onExcluir(transacao.id)}
+            className="text-zinc-500 hover:text-rose-400 p-1.5 transition rounded-lg hover:bg-zinc-800/60 cursor-pointer"
+            title="Excluir lançamento"
+          >
+            <Trash2 size={15} />
+          </button>
+        </div>
       </div>
     </div>
   );

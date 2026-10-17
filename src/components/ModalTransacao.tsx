@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Users, User } from 'lucide-react';
 import {
+  type Transaction,
   type TransactionType,
   type PaymentMethod,
   CATEGORIAS_DESPESA,
@@ -15,7 +16,9 @@ interface ModalTransacaoProps {
   pessoa1: string;
   pessoa2: string;
   salvando: boolean;
+  transacaoEditando: Transaction | null;
   onSalvar: (dados: {
+    id?: string;
     tipo: TransactionType;
     responsavel: string;
     valor: number;
@@ -34,6 +37,7 @@ export function ModalTransacao({
   pessoa1,
   pessoa2,
   salvando,
+  transacaoEditando,
   onSalvar,
 }: ModalTransacaoProps) {
   const [tipo, setTipo] = useState<TransactionType>('despesa');
@@ -46,23 +50,36 @@ export function ModalTransacao({
   const [metodoPagamento, setMetodoPagamento] = useState<PaymentMethod>('Pix/Débito');
   const [parcelas, setParcelas] = useState(1);
 
+  // Preenche os campos se estiver editando uma transação existente
   useEffect(() => {
-    if (aberto) {
+    if (aberto && transacaoEditando) {
+      setTipo(transacaoEditando.tipo);
+      setResponsavel(transacaoEditando.responsavel);
+      setValor(transacaoEditando.valor.toString().replace('.', ','));
+      setLocal(transacaoEditando.local);
+      setData(transacaoEditando.data);
+      setCategoria(transacaoEditando.categoria);
+      setTags(transacaoEditando.tags.map((t) => t.replace(/^#/, '')).join(', '));
+      setMetodoPagamento(transacaoEditando.metodoPagamento);
+      setParcelas(1);
+    } else if (aberto && !transacaoEditando) {
+      setTipo('despesa');
+      setValor('');
+      setLocal('');
       setData(obterDataHojeLocal());
+      setCategoria(CATEGORIAS_DESPESA[0]);
+      setTags('');
+      setMetodoPagamento('Pix/Débito');
+      setParcelas(1);
     }
-  }, [aberto]);
+  }, [aberto, transacaoEditando]);
 
-  useEffect(() => {
-    if (tipo === 'despesa') setCategoria(CATEGORIAS_DESPESA[0]);
-    if (tipo === 'receita') setCategoria(CATEGORIAS_RECEITA[0]);
-    if (tipo === 'poupanca') setCategoria(CATEGORIAS_POUPANCA[0]);
-  }, [tipo]);
-
-  useEffect(() => {
-    if (responsavel !== pessoa1 && responsavel !== pessoa2 && responsavel !== 'Casal') {
-      setResponsavel(pessoa1);
-    }
-  }, [pessoa1, pessoa2, responsavel]);
+  const handleTrocarTipo = (novoTipo: TransactionType) => {
+    setTipo(novoTipo);
+    if (novoTipo === 'despesa') setCategoria(CATEGORIAS_DESPESA[0]);
+    if (novoTipo === 'receita') setCategoria(CATEGORIAS_RECEITA[0]);
+    if (novoTipo === 'poupanca') setCategoria(CATEGORIAS_POUPANCA[0]);
+  };
 
   if (!aberto) return null;
 
@@ -87,6 +104,7 @@ export function ModalTransacao({
       .map((tag) => (tag.startsWith('#') ? tag : `#${tag}`));
 
     await onSalvar({
+      id: transacaoEditando?.id,
       tipo,
       responsavel,
       valor: valorNumerico,
@@ -97,21 +115,18 @@ export function ModalTransacao({
       metodoPagamento,
       parcelas,
     });
-
-    setValor('');
-    setLocal('');
-    setTags('');
-    setParcelas(1);
   };
 
   return (
     <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
-      <div className="bg-zinc-900 border border-zinc-800 w-full max-w-lg rounded-t-3xl sm:rounded-2xl p-5 md:p-6 space-y-4 shadow-2xl">
+      <div className="bg-zinc-900 border border-zinc-800 w-full max-w-lg rounded-t-3xl sm:rounded-2xl p-5 md:p-6 space-y-4 shadow-2xl max-h-[92vh] overflow-y-auto">
         <div className="flex items-center justify-between">
-          <h3 className="font-bold text-base md:text-lg text-white">Novo Lançamento</h3>
+          <h3 className="font-bold text-base md:text-lg text-white">
+            {transacaoEditando ? 'Editar Lançamento' : 'Novo Lançamento'}
+          </h3>
           <button
             onClick={onFechar}
-            className="p-1.5 rounded-full bg-zinc-800 text-zinc-400 hover:text-white transition"
+            className="p-1.5 rounded-full bg-zinc-800 text-zinc-400 hover:text-white transition cursor-pointer"
           >
             <X size={18} />
           </button>
@@ -121,8 +136,8 @@ export function ModalTransacao({
         <div className="grid grid-cols-3 gap-2 bg-zinc-950 p-1 rounded-xl border border-zinc-800">
           <button
             type="button"
-            onClick={() => setTipo('despesa')}
-            className={`py-2 rounded-lg text-xs md:text-sm font-bold transition ${
+            onClick={() => handleTrocarTipo('despesa')}
+            className={`py-2 rounded-lg text-xs md:text-sm font-bold transition cursor-pointer ${
               tipo === 'despesa' ? 'bg-rose-500 text-white' : 'text-zinc-400 hover:text-zinc-200'
             }`}
           >
@@ -130,8 +145,8 @@ export function ModalTransacao({
           </button>
           <button
             type="button"
-            onClick={() => setTipo('receita')}
-            className={`py-2 rounded-lg text-xs md:text-sm font-bold transition ${
+            onClick={() => handleTrocarTipo('receita')}
+            className={`py-2 rounded-lg text-xs md:text-sm font-bold transition cursor-pointer ${
               tipo === 'receita'
                 ? 'bg-emerald-500 text-zinc-950'
                 : 'text-zinc-400 hover:text-zinc-200'
@@ -141,8 +156,8 @@ export function ModalTransacao({
           </button>
           <button
             type="button"
-            onClick={() => setTipo('poupanca')}
-            className={`py-2 rounded-lg text-xs md:text-sm font-bold transition ${
+            onClick={() => handleTrocarTipo('poupanca')}
+            className={`py-2 rounded-lg text-xs md:text-sm font-bold transition cursor-pointer ${
               tipo === 'poupanca'
                 ? 'bg-sky-500 text-zinc-950'
                 : 'text-zinc-400 hover:text-zinc-200'
@@ -161,7 +176,7 @@ export function ModalTransacao({
                 type="button"
                 key={resp}
                 onClick={() => setResponsavel(resp)}
-                className={`py-2 px-3 rounded-xl text-xs md:text-sm font-bold border transition flex items-center justify-center gap-1.5 ${
+                className={`py-2 px-3 rounded-xl text-xs md:text-sm font-bold border transition flex items-center justify-center gap-1.5 cursor-pointer ${
                   responsavel === resp
                     ? 'bg-zinc-100 text-zinc-950 border-white'
                     : 'bg-zinc-950 text-zinc-400 border-zinc-800 hover:border-zinc-700'
@@ -247,7 +262,7 @@ export function ModalTransacao({
             </div>
           </div>
 
-          {tipo === 'despesa' && metodoPagamento === 'Cartão de Crédito' && (
+          {!transacaoEditando && tipo === 'despesa' && metodoPagamento === 'Cartão de Crédito' && (
             <div>
               <label className="text-xs text-zinc-400 font-medium">Parcelas</label>
               <input
@@ -277,7 +292,11 @@ export function ModalTransacao({
             disabled={salvando}
             className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-zinc-950 font-bold py-3 rounded-xl text-sm transition cursor-pointer"
           >
-            {salvando ? 'Salvando na nuvem...' : 'Salvar Lançamento'}
+            {salvando
+              ? 'Salvando...'
+              : transacaoEditando
+              ? 'Salvar Alterações'
+              : 'Salvar Lançamento'}
           </button>
         </form>
       </div>

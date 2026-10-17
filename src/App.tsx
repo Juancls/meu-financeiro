@@ -12,6 +12,7 @@ import {
   List,
   Home,
   Target,
+  Package,
   Users,
   RefreshCw,
   Settings,
@@ -25,6 +26,7 @@ import {
   type PaymentMethod,
   type ActiveTab,
   type CategoryBudget,
+  type EnxovalItem,
   ORCAMENTOS_INICIAIS,
   obterMesAtualLocal,
   formatarMoeda,
@@ -33,6 +35,7 @@ import {
 import { CardTransacao } from './components/CardTransacao';
 import { ModalTransacao } from './components/ModalTransacao';
 import { ModalConfigCasal } from './components/ModalConfigCasal';
+import { AbaEnxoval } from './components/AbaEnxoval';
 
 export default function App() {
   // --- NOMES DO CASAL ---
@@ -43,15 +46,29 @@ export default function App() {
   // --- NAVEGAÇÃO E FILTROS ---
   const [abaAtiva, setAbaAtiva] = useState<ActiveTab>('home');
   const [modalAberto, setModalAberto] = useState(false);
+  const [transacaoEditando, setTransacaoEditando] = useState<Transaction | null>(null);
   const [filtroPessoaGlobal, setFiltroPessoaGlobal] = useState<string>('Todos');
   const [mesSelecionado, setMesSelecionado] = useState(() => obterMesAtualLocal());
   const [sincronizando, setSincronizando] = useState(false);
   const [salvando, setSalvando] = useState(false);
   const [erroNuvem, setErroNuvem] = useState<string | null>(null);
 
-  // --- DADOS ---
+  // --- DADOS DE TRANSAÇÕES ---
   const [transacoes, setTransacoes] = useState<Transaction[]>(() => {
     const salvo = localStorage.getItem('@financas:transacoes_casal');
+    if (salvo) {
+      try {
+        return JSON.parse(salvo);
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  });
+
+  // --- DADOS DO ENXOVAL ---
+  const [itensEnxoval, setItensEnxoval] = useState<EnxovalItem[]>(() => {
+    const salvo = localStorage.getItem('@financas:enxoval_casal');
     if (salvo) {
       try {
         return JSON.parse(salvo);
@@ -136,6 +153,27 @@ export default function App() {
         setTransacoes([...aindaPendentes, ...daNuvem]);
       }
 
+      // Carrega Itens do Enxoval
+      const { data: enxovalData } = await supabase
+        .from('enxoval')
+        .select('*')
+        .order('comodo', { ascending: true })
+        .limit(3000);
+
+      if (enxovalData) {
+        const formatadosEnxoval: EnxovalItem[] = enxovalData.map((row: any) => ({
+          id: String(row.id),
+          comodo: row.comodo || 'Outros',
+          item: row.item,
+          quantidade: Number(row.quantidade) || 1,
+          valor: Number(row.valor) || 0,
+          prioridade: row.prioridade || 'Média',
+          observacao: row.observacao || '',
+          comprado: Boolean(row.comprado),
+        }));
+        setItensEnxoval(formatadosEnxoval);
+      }
+
       const { data: configData } = await supabase
         .from('config_casal')
         .select('*')
@@ -148,7 +186,7 @@ export default function App() {
         if (configData.pessoa2) setPessoa2(configData.pessoa2);
       }
     } catch {
-      setErroNuvem('Sem conexão no momento. Seus gastos estão salvos no aparelho.');
+      setErroNuvem('Sem conexão no momento. Seus dados estão salvos no aparelho.');
     } finally {
       setSincronizando(false);
     }
@@ -161,6 +199,9 @@ export default function App() {
     const canal = supabase
       .channel('realtime-casal')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transacoes' }, () => {
+        carregarDadosNuvem();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'enxoval' }, () => {
         carregarDadosNuvem();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'config_casal' }, () => {
@@ -178,6 +219,10 @@ export default function App() {
   }, [transacoes]);
 
   useEffect(() => {
+    localStorage.setItem('@financas:enxoval_casal', JSON.stringify(itensEnxoval));
+  }, [itensEnxoval]);
+
+  useEffect(() => {
     localStorage.setItem('@financas:pessoa1', pessoa1);
     localStorage.setItem('@financas:pessoa2', pessoa2);
   }, [pessoa1, pessoa2]);
@@ -190,7 +235,7 @@ export default function App() {
     );
   };
 
-  // --- CÁLCULOS ---
+  // --- CÁLCULOS FINANCEIROS ---
   const transacoesDoMes = useMemo(() => {
     return transacoes
       .filter((t) => t.data.startsWith(mesSelecionado))
@@ -236,8 +281,9 @@ export default function App() {
       .reduce((acc, t) => acc + t.valor, 0);
   }, [transacoes, filtroPessoaGlobal]);
 
-  // --- AÇÕES ---
+  // --- AÇÕES DE TRANSAÇÃO (CRIAR E EDITAR) ---
   const handleSalvarTransacao = async (dados: {
+    id?: string;
     tipo: TransactionType;
     responsavel: string;
     valor: number;
@@ -250,6 +296,52 @@ export default function App() {
   }) => {
     setSalvando(true);
 
+    // MODO EDIÇÃO DE LANÇAMENTO EXISTENTE
+    if (dados.id) {
+      const atualizada: Transaction = {
+        id: dados.id,
+        tipo: dados.tipo,
+        valor: dados.valor,
+        data: dados.data,
+        local: dados.local,
+        categoria: dados.categoria,
+        tags: dados.tags,
+        metodoPagamento: dados.metodoPagamento,
+        responsavel: dados.responsavel,
+        parcelaInfo: transacaoEditando?.parcelaInfo,
+        pendenteSync: true,
+      };
+
+      setTransacoes((prev) => prev.map((t) => (t.id === dados.id ? atualizada : t)));
+
+      if (supabase) {
+        const { error } = await supabase.from('transacoes').upsert({
+          id: atualizada.id,
+          tipo: atualizada.tipo,
+          valor: atualizada.valor,
+          data: atualizada.data,
+          local: atualizada.local,
+          categoria: atualizada.categoria,
+          tags: atualizada.tags,
+          metodo_pagamento: atualizada.metodoPagamento,
+          parcela_info: atualizada.parcelaInfo || null,
+          responsavel: atualizada.responsavel,
+        });
+
+        if (!error) {
+          setTransacoes((prev) =>
+            prev.map((t) => (t.id === atualizada.id ? { ...t, pendenteSync: false } : t))
+          );
+        }
+      }
+
+      setSalvando(false);
+      setTransacaoEditando(null);
+      setModalAberto(false);
+      return;
+    }
+
+    // MODO NOVO LANÇAMENTO
     const novasTransacoes: Transaction[] = [];
     const numParcelas =
       dados.tipo === 'despesa' && dados.metodoPagamento === 'Cartão de Crédito'
@@ -323,6 +415,62 @@ export default function App() {
     setTransacoes((prev) => prev.filter((t) => t.id !== id));
     if (supabase) {
       await supabase.from('transacoes').delete().eq('id', id);
+    }
+  };
+
+  const handleAbrirEditarTransacao = (t: Transaction) => {
+    setTransacaoEditando(t);
+    setModalAberto(true);
+  };
+
+  // --- AÇÕES DO ENXOVAL ---
+  const handleSalvarItemEnxoval = async (item: EnxovalItem) => {
+    setItensEnxoval((prev) => {
+      const existe = prev.some((i) => i.id === item.id);
+      return existe ? prev.map((i) => (i.id === item.id ? item : i)) : [item, ...prev];
+    });
+
+    if (supabase) {
+      await supabase.from('enxoval').upsert({
+        id: item.id,
+        comodo: item.comodo,
+        item: item.item,
+        quantidade: item.quantidade,
+        valor: item.valor,
+        prioridade: item.prioridade,
+        observacao: item.observacao,
+        comprado: item.comprado,
+      });
+    }
+  };
+
+  const handleImportarEnxovalEmLote = async (novosItens: EnxovalItem[]) => {
+    setItensEnxoval((prev) => [...novosItens, ...prev]);
+
+    if (supabase) {
+      const payload = novosItens.map((item) => ({
+        id: item.id,
+        comodo: item.comodo,
+        item: item.item,
+        quantidade: item.quantidade,
+        valor: item.valor,
+        prioridade: item.prioridade,
+        observacao: item.observacao,
+        comprado: item.comprado,
+      }));
+      await supabase.from('enxoval').upsert(payload);
+    }
+  };
+
+  const handleAlternarCompradoEnxoval = async (item: EnxovalItem) => {
+    const atualizado = { ...item, comprado: !item.comprado };
+    await handleSalvarItemEnxoval(atualizado);
+  };
+
+  const handleExcluirItemEnxoval = async (id: string) => {
+    setItensEnxoval((prev) => prev.filter((i) => i.id !== id));
+    if (supabase) {
+      await supabase.from('enxoval').delete().eq('id', id);
     }
   };
 
@@ -403,7 +551,8 @@ export default function App() {
   const itensMenu = [
     { id: 'home' as ActiveTab, label: 'Início', icone: Home },
     { id: 'extrato' as ActiveTab, label: 'Extrato', icone: List },
-    { id: 'metas' as ActiveTab, label: 'Poupança & Metas', icone: Target },
+    { id: 'enxoval' as ActiveTab, label: 'Enxoval Casa', icone: Package },
+    { id: 'metas' as ActiveTab, label: 'Poupança', icone: Target },
     { id: 'graficos' as ActiveTab, label: 'Análise', icone: PieChartIcon },
   ];
 
@@ -435,7 +584,10 @@ export default function App() {
           </div>
 
           <button
-            onClick={() => setModalAberto(true)}
+            onClick={() => {
+              setTransacaoEditando(null);
+              setModalAberto(true);
+            }}
             className="w-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold py-3 px-4 rounded-xl text-sm shadow-lg shadow-emerald-500/15 flex items-center justify-center gap-2 transition cursor-pointer"
           >
             <Plus size={18} strokeWidth={2.5} />
@@ -489,7 +641,6 @@ export default function App() {
         <header className="sticky top-0 z-20 bg-zinc-950/90 backdrop-blur-md border-b border-zinc-800/80 px-4 md:px-8 py-3 w-full">
           <div className="max-w-6xl mx-auto flex flex-col gap-3 w-full">
             <div className="flex items-center justify-between gap-2">
-              {/* LOGO MOBILE */}
               <div className="flex items-center gap-2 md:hidden">
                 <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shrink-0">
                   <Wallet size={17} />
@@ -518,25 +669,26 @@ export default function App() {
                 </h1>
               </div>
 
-              {/* SELETOR DE MÊS E ENGRENAGEM MOBILE */}
               <div className="flex items-center gap-2 ml-auto shrink-0">
-                <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-full px-1.5 py-1">
-                  <button
-                    onClick={() => mudarMes(-1)}
-                    className="p-1 text-zinc-400 hover:text-white transition cursor-pointer"
-                  >
-                    <ChevronLeft size={16} />
-                  </button>
-                  <span className="text-xs md:text-sm font-medium px-1.5 min-w-[105px] md:min-w-[140px] text-center truncate">
-                    {nomeMesAno(mesSelecionado)}
-                  </span>
-                  <button
-                    onClick={() => mudarMes(1)}
-                    className="p-1 text-zinc-400 hover:text-white transition cursor-pointer"
-                  >
-                    <ChevronRight size={16} />
-                  </button>
-                </div>
+                {abaAtiva !== 'enxoval' && (
+                  <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-full px-1.5 py-1">
+                    <button
+                      onClick={() => mudarMes(-1)}
+                      className="p-1 text-zinc-400 hover:text-white transition cursor-pointer"
+                    >
+                      <ChevronLeft size={16} />
+                    </button>
+                    <span className="text-xs md:text-sm font-medium px-1.5 min-w-[105px] md:min-w-[140px] text-center truncate">
+                      {nomeMesAno(mesSelecionado)}
+                    </span>
+                    <button
+                      onClick={() => mudarMes(1)}
+                      className="p-1 text-zinc-400 hover:text-white transition cursor-pointer"
+                    >
+                      <ChevronRight size={16} />
+                    </button>
+                  </div>
+                )}
 
                 <button
                   onClick={() => setModalConfigAberto(true)}
@@ -561,22 +713,23 @@ export default function App() {
               </div>
             )}
 
-            {/* FILTRO DO CASAL */}
-            <div className="grid grid-cols-4 gap-1.5 bg-zinc-900/90 p-1 rounded-xl border border-zinc-800/80 w-full">
-              {(['Todos', pessoa1, pessoa2, 'Casal'] as const).map((item) => (
-                <button
-                  key={item}
-                  onClick={() => setFiltroPessoaGlobal(item)}
-                  className={`py-1.5 rounded-lg text-xs font-semibold transition truncate px-1 text-center cursor-pointer ${
-                    filtroPessoaGlobal === item
-                      ? 'bg-emerald-500 text-zinc-950 shadow'
-                      : 'text-zinc-400 hover:text-zinc-200'
-                  }`}
-                >
-                  {item === 'Todos' ? 'Visão Geral' : item}
-                </button>
-              ))}
-            </div>
+            {abaAtiva !== 'enxoval' && (
+              <div className="grid grid-cols-4 gap-1.5 bg-zinc-900/90 p-1 rounded-xl border border-zinc-800/80 w-full">
+                {(['Todos', pessoa1, pessoa2, 'Casal'] as const).map((item) => (
+                  <button
+                    key={item}
+                    onClick={() => setFiltroPessoaGlobal(item)}
+                    className={`py-1.5 rounded-lg text-xs font-semibold transition truncate px-1 text-center cursor-pointer ${
+                      filtroPessoaGlobal === item
+                        ? 'bg-emerald-500 text-zinc-950 shadow'
+                        : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    {item === 'Todos' ? 'Visão Geral' : item}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </header>
 
@@ -587,7 +740,6 @@ export default function App() {
           {abaAtiva === 'home' && (
             <div className="space-y-6">
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-                
                 <div className="lg:col-span-7 bg-gradient-to-br from-zinc-900 via-zinc-900 to-emerald-950/40 border border-zinc-800 rounded-2xl p-5 md:p-6 shadow-lg flex flex-col justify-between">
                   <div>
                     <div className="flex items-center justify-between">
@@ -709,7 +861,7 @@ export default function App() {
                   <div className="text-center py-12 bg-zinc-900/40 border border-zinc-800/60 rounded-2xl">
                     <p className="text-sm text-zinc-400">Nenhum lançamento neste mês.</p>
                     <p className="text-xs text-zinc-500 mt-1">
-                      Use o botão central "+" para registrar.
+                      Use o botão "+" para registrar.
                     </p>
                   </div>
                 ) : (
@@ -719,6 +871,7 @@ export default function App() {
                         key={t.id}
                         transacao={t}
                         pessoa1={pessoa1}
+                        onEditar={handleAbrirEditarTransacao}
                         onExcluir={handleExcluir}
                       />
                     ))}
@@ -773,11 +926,23 @@ export default function App() {
                     key={t.id}
                     transacao={t}
                     pessoa1={pessoa1}
+                    onEditar={handleAbrirEditarTransacao}
                     onExcluir={handleExcluir}
                   />
                 ))}
               </div>
             </div>
+          )}
+
+          {/* ABA NOVA: ENXOVAL DA CASA NOVA */}
+          {abaAtiva === 'enxoval' && (
+            <AbaEnxoval
+              itens={itensEnxoval}
+              onSalvarItem={handleSalvarItemEnxoval}
+              onImportarEmLote={handleImportarEnxovalEmLote}
+              onAlternarComprado={handleAlternarCompradoEnxoval}
+              onExcluirItem={handleExcluirItemEnxoval}
+            />
           )}
 
           {/* ABA 3: POUPANÇA & METAS */}
@@ -935,51 +1100,58 @@ export default function App() {
 
         {/* ==================== BOTTOM NAVIGATION MOBILE ==================== */}
         <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800/80">
-          <div className="w-full px-3 h-16 flex items-center justify-between relative">
+          <div className="w-full px-1 h-16 grid grid-cols-5 items-center relative">
             <button
               onClick={() => setAbaAtiva('home')}
-              className={`flex flex-col items-center justify-center flex-1 h-full gap-1 text-[11px] transition cursor-pointer ${
+              className={`flex flex-col items-center justify-center h-full gap-1 text-[10px] transition cursor-pointer ${
                 abaAtiva === 'home' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
               }`}
             >
-              <Home size={20} />
+              <Home size={19} />
               <span>Início</span>
             </button>
+
             <button
               onClick={() => setAbaAtiva('extrato')}
-              className={`flex flex-col items-center justify-center flex-1 h-full gap-1 text-[11px] transition mr-8 cursor-pointer ${
+              className={`flex flex-col items-center justify-center h-full gap-1 text-[10px] transition cursor-pointer ${
                 abaAtiva === 'extrato' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
               }`}
             >
-              <List size={20} />
+              <List size={19} />
               <span>Extrato</span>
             </button>
 
-            {/* BOTÃO FLUTUANTE CENTRAL */}
+            {/* BOTÃO CENTRAL DE NOVO LANÇAMENTO */}
+            <div className="flex items-center justify-center">
+              <button
+                onClick={() => {
+                  setTransacaoEditando(null);
+                  setModalAberto(true);
+                }}
+                className="-top-4 relative w-13 h-13 rounded-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 shadow-lg shadow-emerald-500/25 flex items-center justify-center transition transform active:scale-95 cursor-pointer"
+              >
+                <Plus size={26} strokeWidth={2.5} />
+              </button>
+            </div>
+
             <button
-              onClick={() => setModalAberto(true)}
-              className="absolute left-1/2 -translate-x-1/2 -top-5 w-14 h-14 rounded-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 shadow-lg shadow-emerald-500/25 flex items-center justify-center transition transform active:scale-95 cursor-pointer z-50"
+              onClick={() => setAbaAtiva('enxoval')}
+              className={`flex flex-col items-center justify-center h-full gap-1 text-[10px] transition cursor-pointer ${
+                abaAtiva === 'enxoval' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
+              }`}
             >
-              <Plus size={28} strokeWidth={2.5} />
+              <Package size={19} />
+              <span>Enxoval</span>
             </button>
 
             <button
               onClick={() => setAbaAtiva('metas')}
-              className={`flex flex-col items-center justify-center flex-1 h-full gap-1 text-[11px] transition ml-8 cursor-pointer ${
+              className={`flex flex-col items-center justify-center h-full gap-1 text-[10px] transition cursor-pointer ${
                 abaAtiva === 'metas' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
               }`}
             >
-              <Target size={20} />
+              <Target size={19} />
               <span>Poupança</span>
-            </button>
-            <button
-              onClick={() => setAbaAtiva('graficos')}
-              className={`flex flex-col items-center justify-center flex-1 h-full gap-1 text-[11px] transition cursor-pointer ${
-                abaAtiva === 'graficos' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
-              }`}
-            >
-              <PieChartIcon size={20} />
-              <span>Análise</span>
             </button>
           </div>
         </nav>
@@ -987,10 +1159,14 @@ export default function App() {
         {/* MODAIS */}
         <ModalTransacao
           aberto={modalAberto}
-          onFechar={() => setModalAberto(false)}
+          onFechar={() => {
+            setModalAberto(false);
+            setTransacaoEditando(null);
+          }}
           pessoa1={pessoa1}
           pessoa2={pessoa2}
           salvando={salvando}
+          transacaoEditando={transacaoEditando}
           onSalvar={handleSalvarTransacao}
         />
 

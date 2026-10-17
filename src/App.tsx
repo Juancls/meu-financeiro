@@ -35,7 +35,7 @@ import {
 import { CardTransacao } from './components/CardTransacao';
 import { ModalTransacao } from './components/ModalTransacao';
 import { ModalConfigCasal } from './components/ModalConfigCasal';
-import { AbaEnxoval } from './components/Abaenxoval';
+import { AbaEnxoval } from './components/AbaEnxoval';
 
 export default function App() {
   // --- NOMES DO CASAL ---

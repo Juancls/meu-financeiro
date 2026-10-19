@@ -1,3 +1,4 @@
+export type AccountId = 'casal' | 'vitoria';
 export type TransactionType = 'despesa' | 'receita' | 'poupanca' | 'resgate_poupanca';
 export type PaymentMethod = 'Pix/Débito' | 'Cartão de Crédito' | 'Dinheiro';
 export type ActiveTab = 'home' | 'extrato' | 'metas' | 'enxoval' | 'observacoes' | 'graficos';
@@ -87,6 +88,9 @@ export const ORCAMENTOS_INICIAIS: CategoryBudget[] = [
   { categoria: 'Casa/Casamento', limite: 600 },
   { categoria: 'Transporte', limite: 300 },
   { categoria: 'Contas Fixas', limite: 700 },
+  { categoria: 'Compras', limite: 400 },
+  { categoria: 'Saúde', limite: 250 },
+  { categoria: 'Outros', limite: 200 },
 ];
 
 export const obterDataHojeLocal = () => {

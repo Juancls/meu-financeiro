@@ -20,9 +20,12 @@ import {
   Settings,
   Check,
   AlertCircle,
+  Pencil,
+  LogOut,
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
 import {
+  type AccountId,
   type Transaction,
   type TransactionType,
   type PaymentMethod,
@@ -41,11 +44,21 @@ import { ModalConfigCasal } from './components/ModalConfigCasal';
 import { AbaEnxoval } from './components/AbaEnxoval';
 import { AbaObservacoes } from './components/AbaObservacoes';
 import { ImportadorPlanilhaGastos } from './components/ImportadorPlanilhaGastos';
+import { TelaLogin } from './components/TelaLogin';
 
 export default function App() {
-  // --- NOMES DO CASAL ---
-  const [pessoa1, setPessoa1] = useState(() => localStorage.getItem('@financas:pessoa1') || 'Juan');
-  const [pessoa2, setPessoa2] = useState(() => localStorage.getItem('@financas:pessoa2') || 'Noiva');
+  // --- USUÁRIO LOGADO ('casal' ou 'vitoria') ---
+  const [contaAtiva, setContaAtiva] = useState<AccountId | null>(() => {
+    const salvo = localStorage.getItem('@financas:conta_ativa');
+    return salvo === 'casal' || salvo === 'vitoria' ? salvo : null;
+  });
+
+  const prefixoStorage = contaAtiva ? `@financas:${contaAtiva}` : '@financas:casal';
+  const idConfigBanco = contaAtiva === 'vitoria' ? 2 : 1;
+
+  // --- NOMES DO PERFIL ---
+  const [pessoa1, setPessoa1] = useState('Juan');
+  const [pessoa2, setPessoa2] = useState('Noiva');
   const [modalConfigAberto, setModalConfigAberto] = useState(false);
 
   // --- NAVEGAÇÃO E FILTROS ---
@@ -59,87 +72,66 @@ export default function App() {
   const [salvando, setSalvando] = useState(false);
   const [erroNuvem, setErroNuvem] = useState<string | null>(null);
 
-  // --- DADOS DE TRANSAÇÕES ---
-  const [transacoes, setTransacoes] = useState<Transaction[]>(() => {
-    const salvo = localStorage.getItem('@financas:transacoes_casal');
-    if (salvo) {
-      try {
-        return JSON.parse(salvo);
-      } catch {
-        return [];
-      }
-    }
-    return [];
-  });
+  // --- DADOS ---
+  const [transacoes, setTransacoes] = useState<Transaction[]>([]);
+  const [itensEnxoval, setItensEnxoval] = useState<EnxovalItem[]>([]);
+  const [observacoesMes, setObservacoesMes] = useState<ObservacaoMes[]>([]);
+  const [metaPoupanca, setMetaPoupanca] = useState<number>(10000);
+  const [orcamentos, setOrcamentos] = useState<CategoryBudget[]>(ORCAMENTOS_INICIAIS);
 
-  // --- DADOS DO ENXOVAL ---
-  const [itensEnxoval, setItensEnxoval] = useState<EnxovalItem[]>(() => {
-    const salvo = localStorage.getItem('@financas:enxoval_casal');
-    if (salvo) {
-      try {
-        return JSON.parse(salvo);
-      } catch {
-        return [];
-      }
-    }
-    return [];
-  });
-
-  // --- DADOS DE OBSERVAÇÕES DO MÊS ---
-  const [observacoesMes, setObservacoesMes] = useState<ObservacaoMes[]>(() => {
-    const salvo = localStorage.getItem('@financas:observacoes_casal');
-    if (salvo) {
-      try {
-        return JSON.parse(salvo);
-      } catch {
-        return [];
-      }
-    }
-    return [];
-  });
-
-  const [metaPoupanca, setMetaPoupanca] = useState<number>(() => {
-    const salvo = localStorage.getItem('@financas:metaPoupanca');
-    return salvo ? Number(salvo) : 10000;
-  });
-
-  const [orcamentos] = useState<CategoryBudget[]>(ORCAMENTOS_INICIAIS);
-
-  // --- BUSCA E META ---
+  // --- EDIÇÃO DE METAS (POUPANÇA E TETO DE GASTOS DO MÊS) ---
   const [busca, setBusca] = useState('');
   const [filtroTipo, setFiltroTipo] = useState<'todos' | TransactionType>('todos');
   const [editandoMeta, setEditandoMeta] = useState(false);
-  const [novaMetaInput, setNovaMetaInput] = useState(metaPoupanca.toString());
+  const [novaMetaInput, setNovaMetaInput] = useState('10000');
+  const [editandoOrcamentos, setEditandoOrcamentos] = useState(false);
+  const [orcamentosTemp, setOrcamentosTemp] = useState<Record<string, string>>({});
 
-  // --- SINCRONIZAÇÃO COM SUPABASE ---
+  // Carrega dados locais do usuário sempre que trocar de conta
+  useEffect(() => {
+    if (!contaAtiva) return;
+    localStorage.setItem('@financas:conta_ativa', contaAtiva);
+
+    const p1Padrao = contaAtiva === 'vitoria' ? 'Vitória' : 'Juan';
+    const p2Padrao = contaAtiva === 'vitoria' ? 'Parceiro(a)' : 'Noiva';
+
+    setPessoa1(localStorage.getItem(`${prefixoStorage}:pessoa1`) || p1Padrao);
+    setPessoa2(localStorage.getItem(`${prefixoStorage}:pessoa2`) || p2Padrao);
+    setFiltroPessoaGlobal('Todos');
+
+    try {
+      const trSalvas = localStorage.getItem(`${prefixoStorage}:transacoes`);
+      setTransacoes(trSalvas ? JSON.parse(trSalvas) : []);
+
+      const enxSalvo = localStorage.getItem(`${prefixoStorage}:enxoval`);
+      setItensEnxoval(enxSalvo ? JSON.parse(enxSalvo) : []);
+
+      const obsSalvas = localStorage.getItem(`${prefixoStorage}:observacoes`);
+      setObservacoesMes(obsSalvas ? JSON.parse(obsSalvas) : []);
+
+      const orcSalvos = localStorage.getItem(`${prefixoStorage}:orcamentos`);
+      setOrcamentos(orcSalvos ? JSON.parse(orcSalvos) : ORCAMENTOS_INICIAIS);
+    } catch {
+      setTransacoes([]);
+    }
+  }, [contaAtiva, prefixoStorage]);
+
+  // --- SINCRONIZAÇÃO COM SUPABASE POR CONTA ---
   const carregarDadosNuvem = async () => {
-    if (!supabase) return;
+    if (!supabase || !contaAtiva) return;
     setSincronizando(true);
 
     try {
-      const localSalvo = localStorage.getItem('@financas:transacoes_casal');
-      const listaLocal: Transaction[] = localSalvo ? JSON.parse(localSalvo) : [];
-      const pendentes = listaLocal.filter((t) => t.pendenteSync);
-
-      if (pendentes.length > 0) {
-        const payloadPendentes = pendentes.map((t) => ({
-          id: t.id,
-          tipo: t.tipo,
-          valor: t.valor,
-          data: t.data,
-          local: t.local,
-          categoria: t.categoria,
-          tags: t.tags,
-          metodo_pagamento: t.metodoPagamento,
-          parcela_info: t.parcelaInfo || null,
-          responsavel: t.responsavel,
-        }));
-        await supabase.from('transacoes').upsert(payloadPendentes);
-      }
+      // Filtra no banco de acordo com o usuário logado
+      const filtroConta =
+        contaAtiva === 'casal'
+          ? 'conta_id.eq.casal,conta_id.is.null'
+          : 'conta_id.eq.vitoria';
 
       const { data: transData, error: transError } = await supabase
         .from('transacoes')
         .select('*')
+        .or(filtroConta)
         .order('data', { ascending: false })
         .order('created_at', { ascending: false })
         .limit(3000);
@@ -166,64 +158,69 @@ export default function App() {
           responsavel: row.responsavel,
           pendenteSync: false,
         }));
-
-        const idsNuvem = new Set(daNuvem.map((t) => t.id));
-        const aindaPendentes = pendentes.filter((t) => !idsNuvem.has(t.id));
-        setTransacoes([...aindaPendentes, ...daNuvem]);
+        setTransacoes(daNuvem);
       }
 
-      // Carrega Itens do Enxoval
+      // Carrega Enxoval da Conta
       const { data: enxovalData } = await supabase
         .from('enxoval')
         .select('*')
+        .or(filtroConta)
         .order('comodo', { ascending: true })
         .limit(3000);
 
       if (enxovalData) {
-        const formatadosEnxoval: EnxovalItem[] = enxovalData.map((row: any) => ({
-          id: String(row.id),
-          comodo: row.comodo || 'Outros',
-          item: row.item,
-          quantidade: Number(row.quantidade) || 1,
-          valor: Number(row.valor) || 0,
-          prioridade: row.prioridade || 'Média',
-          observacao: row.observacao || '',
-          comprado: Boolean(row.comprado),
-        }));
-        setItensEnxoval(formatadosEnxoval);
+        setItensEnxoval(
+          enxovalData.map((row: any) => ({
+            id: String(row.id),
+            comodo: row.comodo || 'Outros',
+            item: row.item,
+            quantidade: Number(row.quantidade) || 1,
+            valor: Number(row.valor) || 0,
+            prioridade: row.prioridade || 'Média',
+            observacao: row.observacao || '',
+            comprado: Boolean(row.comprado),
+          }))
+        );
       }
 
-      // Carrega Observações do Mês
+      // Carrega Observações da Conta
       const { data: obsData } = await supabase
         .from('observacoes_mes')
         .select('*')
+        .or(filtroConta)
         .order('created_at', { ascending: false })
         .limit(1000);
 
       if (obsData) {
-        const formatadasObs: ObservacaoMes[] = obsData.map((row: any) => ({
-          id: String(row.id),
-          mes: row.mes,
-          autor: row.autor,
-          titulo: row.titulo,
-          texto: row.texto,
-          valor: row.valor ? Number(row.valor) : undefined,
-          resolvido: Boolean(row.resolvido),
-          dataCriacao: row.data_criacao,
-        }));
-        setObservacoesMes(formatadasObs);
+        setObservacoesMes(
+          obsData.map((row: any) => ({
+            id: String(row.id),
+            mes: row.mes,
+            autor: row.autor,
+            titulo: row.titulo,
+            texto: row.texto,
+            valor: row.valor ? Number(row.valor) : undefined,
+            resolvido: Boolean(row.resolvido),
+            dataCriacao: row.data_criacao,
+          }))
+        );
       }
 
+      // Carrega Configurações e Metas de Gastos da Conta (id 1 = Casal, id 2 = Vitória)
       const { data: configData } = await supabase
         .from('config_casal')
         .select('*')
-        .eq('id', 1)
+        .eq('id', idConfigBanco)
         .single();
 
       if (configData) {
-        setMetaPoupanca(Number(configData.meta_poupanca));
+        if (configData.meta_poupanca) setMetaPoupanca(Number(configData.meta_poupanca));
         if (configData.pessoa1) setPessoa1(configData.pessoa1);
         if (configData.pessoa2) setPessoa2(configData.pessoa2);
+        if (Array.isArray(configData.orcamentos) && configData.orcamentos.length > 0) {
+          setOrcamentos(configData.orcamentos);
+        }
       }
     } catch {
       setErroNuvem('Sem conexão no momento. Seus dados estão salvos no aparelho.');
@@ -233,11 +230,11 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!supabase) return;
+    if (!supabase || !contaAtiva) return;
     carregarDadosNuvem();
 
     const canal = supabase
-      .channel('realtime-casal')
+      .channel(`realtime-${contaAtiva}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transacoes' }, () => {
         carregarDadosNuvem();
       })
@@ -255,24 +252,34 @@ export default function App() {
     return () => {
       supabase.removeChannel(canal);
     };
-  }, []);
+  }, [contaAtiva]);
+
+  // Salva no LocalStorage separado por conta
+  useEffect(() => {
+    if (!contaAtiva) return;
+    localStorage.setItem(`${prefixoStorage}:transacoes`, JSON.stringify(transacoes));
+  }, [transacoes, contaAtiva, prefixoStorage]);
 
   useEffect(() => {
-    localStorage.setItem('@financas:transacoes_casal', JSON.stringify(transacoes));
-  }, [transacoes]);
+    if (!contaAtiva) return;
+    localStorage.setItem(`${prefixoStorage}:enxoval`, JSON.stringify(itensEnxoval));
+  }, [itensEnxoval, contaAtiva, prefixoStorage]);
 
   useEffect(() => {
-    localStorage.setItem('@financas:enxoval_casal', JSON.stringify(itensEnxoval));
-  }, [itensEnxoval]);
+    if (!contaAtiva) return;
+    localStorage.setItem(`${prefixoStorage}:observacoes`, JSON.stringify(observacoesMes));
+  }, [observacoesMes, contaAtiva, prefixoStorage]);
 
   useEffect(() => {
-    localStorage.setItem('@financas:observacoes_casal', JSON.stringify(observacoesMes));
-  }, [observacoesMes]);
+    if (!contaAtiva) return;
+    localStorage.setItem(`${prefixoStorage}:orcamentos`, JSON.stringify(orcamentos));
+  }, [orcamentos, contaAtiva, prefixoStorage]);
 
   useEffect(() => {
-    localStorage.setItem('@financas:pessoa1', pessoa1);
-    localStorage.setItem('@financas:pessoa2', pessoa2);
-  }, [pessoa1, pessoa2]);
+    if (!contaAtiva) return;
+    localStorage.setItem(`${prefixoStorage}:pessoa1`, pessoa1);
+    localStorage.setItem(`${prefixoStorage}:pessoa2`, pessoa2);
+  }, [pessoa1, pessoa2, contaAtiva, prefixoStorage]);
 
   const mudarMes = (direcao: number) => {
     const [ano, mes] = mesSelecionado.split('-').map(Number);
@@ -354,12 +361,46 @@ export default function App() {
     };
   }, [transacoes, filtroPessoaGlobal]);
 
-  // --- IMPORTAÇÃO EM LOTE DA PLANILHA ANTIGA (JAN A JUL) ---
+  // --- SALVAR METAS DE GASTOS DO MÊS (ORÇAMENTOS) ---
+  const abrirEdicaoOrcamentos = () => {
+    const mapa: Record<string, string> = {};
+    orcamentos.forEach((o) => {
+      mapa[o.categoria] = String(o.limite);
+    });
+    setOrcamentosTemp(mapa);
+    setEditandoOrcamentos(true);
+  };
+
+  const salvarOrcamentos = async () => {
+    const novosOrcamentos: CategoryBudget[] = orcamentos.map((o) => {
+      const digitado = orcamentosTemp[o.categoria] ?? String(o.limite);
+      const valLimpo = digitado.replace(',', '.');
+      const num = parseFloat(valLimpo);
+      return {
+        categoria: o.categoria,
+        limite: !isNaN(num) && num >= 0 ? num : o.limite,
+      };
+    });
+
+    setOrcamentos(novosOrcamentos);
+    setEditandoOrcamentos(false);
+
+    if (supabase) {
+      await supabase.from('config_casal').upsert({
+        id: idConfigBanco,
+        meta_poupanca: metaPoupanca,
+        pessoa1,
+        pessoa2,
+        orcamentos: novosOrcamentos,
+      });
+    }
+  };
+
+  // --- IMPORTAÇÃO DA PLANILHA ANTIGA ---
   const handleImportarPlanilhaAntiga = async (
     novasTransacoes: Transaction[],
     novasObservacoes: ObservacaoMes[]
   ) => {
-    // 1. Atualiza no estado local sem duplicar IDs
     setTransacoes((prev) => {
       const mapa = new Map<string, Transaction>();
       prev.forEach((t) => mapa.set(t.id, t));
@@ -374,10 +415,9 @@ export default function App() {
       return Array.from(mapa.values());
     });
 
-    // 2. Envia para o Supabase
     if (supabase) {
       const payloadTrans = novasTransacoes.map((t) => ({
-        id: t.id,
+        id: `${contaAtiva}-${t.id}`,
         tipo: t.tipo,
         valor: t.valor,
         data: t.data,
@@ -387,19 +427,14 @@ export default function App() {
         metodo_pagamento: t.metodoPagamento,
         parcela_info: t.parcelaInfo || null,
         responsavel: t.responsavel,
+        conta_id: contaAtiva,
       }));
 
-      const { error: errTrans } = await supabase.from('transacoes').upsert(payloadTrans);
-      if (!errTrans) {
-        const idsImportados = new Set(novasTransacoes.map((t) => t.id));
-        setTransacoes((prev) =>
-          prev.map((t) => (idsImportados.has(t.id) ? { ...t, pendenteSync: false } : t))
-        );
-      }
+      await supabase.from('transacoes').upsert(payloadTrans);
 
       if (novasObservacoes.length > 0) {
         const payloadObs = novasObservacoes.map((o) => ({
-          id: o.id,
+          id: `${contaAtiva}-${o.id}`,
           mes: o.mes,
           autor: o.autor,
           titulo: o.titulo,
@@ -407,12 +442,12 @@ export default function App() {
           valor: o.valor || 0,
           resolvido: o.resolvido,
           data_criacao: o.dataCriacao,
+          conta_id: contaAtiva,
         }));
         await supabase.from('observacoes_mes').upsert(payloadObs);
       }
     }
 
-    // Muda para Julho/2026 para você já ver os dados importados na hora
     setMesSelecionado('2026-07');
   };
 
@@ -443,13 +478,13 @@ export default function App() {
         metodoPagamento: dados.metodoPagamento,
         responsavel: dados.responsavel,
         parcelaInfo: transacaoEditando?.parcelaInfo,
-        pendenteSync: true,
+        pendenteSync: false,
       };
 
       setTransacoes((prev) => prev.map((t) => (t.id === dados.id ? atualizada : t)));
 
       if (supabase) {
-        const { error } = await supabase.from('transacoes').upsert({
+        await supabase.from('transacoes').upsert({
           id: atualizada.id,
           tipo: atualizada.tipo,
           valor: atualizada.valor,
@@ -460,13 +495,8 @@ export default function App() {
           metodo_pagamento: atualizada.metodoPagamento,
           parcela_info: atualizada.parcelaInfo || null,
           responsavel: atualizada.responsavel,
+          conta_id: contaAtiva,
         });
-
-        if (!error) {
-          setTransacoes((prev) =>
-            prev.map((t) => (t.id === atualizada.id ? { ...t, pendenteSync: false } : t))
-          );
-        }
       }
 
       setSalvando(false);
@@ -492,7 +522,7 @@ export default function App() {
       )}-${String(dataParcela.getDate()).padStart(2, '0')}`;
 
       novasTransacoes.push({
-        id: `${Date.now()}-${sufixoAleatorio}-${i}`,
+        id: `${contaAtiva}-${Date.now()}-${sufixoAleatorio}-${i}`,
         tipo: dados.tipo,
         valor: valorParcela,
         data: dataStr,
@@ -502,7 +532,7 @@ export default function App() {
         metodoPagamento: dados.metodoPagamento,
         parcelaInfo: numParcelas > 1 ? `${i + 1}/${numParcelas}` : undefined,
         responsavel: dados.responsavel,
-        pendenteSync: true,
+        pendenteSync: false,
       });
     }
 
@@ -525,17 +555,11 @@ export default function App() {
         metodo_pagamento: t.metodoPagamento,
         parcela_info: t.parcelaInfo || null,
         responsavel: t.responsavel,
+        conta_id: contaAtiva,
       }));
 
       const { error } = await supabase.from('transacoes').upsert(payload);
-
-      if (!error) {
-        const idsSalvos = new Set(novasTransacoes.map((t) => t.id));
-        setTransacoes((prev) =>
-          prev.map((t) => (idsSalvos.has(t.id) ? { ...t, pendenteSync: false } : t))
-        );
-        setErroNuvem(null);
-      } else {
+      if (error) {
         setErroNuvem(`Salvo no aparelho, mas falhou na nuvem (${error.message}).`);
       }
     }
@@ -573,15 +597,20 @@ export default function App() {
         prioridade: item.prioridade,
         observacao: item.observacao,
         comprado: item.comprado,
+        conta_id: contaAtiva,
       });
     }
   };
 
   const handleImportarEnxovalEmLote = async (novosItens: EnxovalItem[]) => {
-    setItensEnxoval((prev) => [...novosItens, ...prev]);
+    const itensComConta = novosItens.map((i) => ({
+      ...i,
+      id: `${contaAtiva}-${i.id}`,
+    }));
+    setItensEnxoval((prev) => [...itensComConta, ...prev]);
 
     if (supabase) {
-      const payload = novosItens.map((item) => ({
+      const payload = itensComConta.map((item) => ({
         id: item.id,
         comodo: item.comodo,
         item: item.item,
@@ -590,6 +619,7 @@ export default function App() {
         prioridade: item.prioridade,
         observacao: item.observacao,
         comprado: item.comprado,
+        conta_id: contaAtiva,
       }));
       await supabase.from('enxoval').upsert(payload);
     }
@@ -624,6 +654,7 @@ export default function App() {
         valor: obs.valor || 0,
         resolvido: obs.resolvido,
         data_criacao: obs.dataCriacao,
+        conta_id: contaAtiva,
       });
     }
   };
@@ -645,46 +676,24 @@ export default function App() {
     const p1Final = (nP1 ?? pessoa1).trim() || 'Juan';
     const p2Final = (nP2 ?? pessoa2).trim() || 'Noiva';
 
-    const nomeAntigoP1 = localStorage.getItem('@financas:pessoa1') || 'Juan';
-    const nomeAntigoP2 = localStorage.getItem('@financas:pessoa2') || 'Noiva';
-
-    if (nomeAntigoP1 !== p1Final || nomeAntigoP2 !== p2Final) {
-      setTransacoes((prev) =>
-        prev.map((t) => {
-          if (t.responsavel === nomeAntigoP1) return { ...t, responsavel: p1Final };
-          if (t.responsavel === nomeAntigoP2) return { ...t, responsavel: p2Final };
-          return t;
-        })
-      );
-
-      if (supabase) {
-        if (nomeAntigoP1 !== p1Final) {
-          await supabase
-            .from('transacoes')
-            .update({ responsavel: p1Final })
-            .eq('responsavel', nomeAntigoP1);
-        }
-        if (nomeAntigoP2 !== p2Final) {
-          await supabase
-            .from('transacoes')
-            .update({ responsavel: p2Final })
-            .eq('responsavel', nomeAntigoP2);
-        }
-      }
-    }
-
     setPessoa1(p1Final);
     setPessoa2(p2Final);
     setFiltroPessoaGlobal('Todos');
 
     if (supabase) {
       await supabase.from('config_casal').upsert({
-        id: 1,
+        id: idConfigBanco,
         meta_poupanca: metaFinal,
         pessoa1: p1Final,
         pessoa2: p2Final,
+        orcamentos,
       });
     }
+  };
+
+  const handleTrocarUsuario = () => {
+    localStorage.removeItem('@financas:conta_ativa');
+    setContaAtiva(null);
   };
 
   const transacoesFiltradas = useMemo(() => {
@@ -712,7 +721,11 @@ export default function App() {
       .sort((a, b) => b.total - a.total);
   }, [transacoesDoMes]);
 
-  const qtdPendentes = transacoes.filter((t) => t.pendenteSync).length;
+  // SE NÃO ESTIVER LOGADO, EXIBE A TELA DE VERIFICAÇÃO DE USUÁRIO
+  if (!contaAtiva) {
+    return <TelaLogin onEntrar={(conta) => setContaAtiva(conta)} />;
+  }
+
   const qtdObsDoMes = observacoesMes.filter((o) => o.mes === mesSelecionado).length;
 
   const itensMenu = [
@@ -720,7 +733,7 @@ export default function App() {
     { id: 'extrato' as ActiveTab, label: 'Extrato', icone: List },
     { id: 'observacoes' as ActiveTab, label: 'Notas do Mês', icone: FileText, badge: qtdObsDoMes },
     { id: 'enxoval' as ActiveTab, label: 'Enxoval Casa', icone: Package },
-    { id: 'metas' as ActiveTab, label: 'Poupança', icone: Target },
+    { id: 'metas' as ActiveTab, label: 'Poupança & Metas', icone: Target },
     { id: 'graficos' as ActiveTab, label: 'Análise', icone: PieChartIcon },
   ];
 
@@ -739,13 +752,15 @@ export default function App() {
                 <span className="font-bold tracking-tight text-base text-white block leading-none">
                   NossoFinanceiro
                 </span>
-                <span className="text-[11px] text-zinc-400">Gestão do Casal</span>
+                <span className="text-[11px] text-emerald-400 font-medium">
+                  Conta: {contaAtiva === 'vitoria' ? 'Vitória' : `${pessoa1} & ${pessoa2}`}
+                </span>
               </div>
             </div>
             <button
               onClick={() => setModalConfigAberto(true)}
               className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white transition cursor-pointer"
-              title="Configurar nomes do casal"
+              title="Configurar nomes"
             >
               <Settings size={16} />
             </button>
@@ -792,22 +807,31 @@ export default function App() {
           </nav>
         </div>
 
-        <div className="pt-4 border-t border-zinc-800/80 space-y-2.5">
-          <ImportadorPlanilhaGastos onImportarDados={handleImportarPlanilhaAntiga} />
+        <div className="pt-4 border-t border-zinc-800/80 space-y-2">
+          {contaAtiva === 'casal' && (
+            <ImportadorPlanilhaGastos onImportarDados={handleImportarPlanilhaAntiga} />
+          )}
 
           <button
             onClick={carregarDadosNuvem}
             className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-zinc-300 hover:border-zinc-700 transition cursor-pointer"
           >
             <span className="flex items-center gap-2">
-              <RefreshCw size={13} className={sincronizando ? 'animate-spin text-emerald-400' : 'text-emerald-400'} />
-              {sincronizando
-                ? 'Sincronizando...'
-                : qtdPendentes > 0
-                ? `${qtdPendentes} pendente(s)`
-                : 'Sincronizado na Nuvem'}
+              <RefreshCw
+                size={13}
+                className={sincronizando ? 'animate-spin text-emerald-400' : 'text-emerald-400'}
+              />
+              {sincronizando ? 'Sincronizando...' : 'Sincronizado na Nuvem'}
             </span>
             <span className="w-2 h-2 rounded-full bg-emerald-400" />
+          </button>
+
+          <button
+            onClick={handleTrocarUsuario}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-zinc-900 hover:bg-rose-950/40 border border-zinc-800 hover:border-rose-800/50 text-xs text-zinc-400 hover:text-rose-300 transition cursor-pointer"
+          >
+            <LogOut size={13} />
+            Trocar Usuário ({contaAtiva === 'vitoria' ? 'Vitória' : 'Casal'})
           </button>
         </div>
       </aside>
@@ -825,18 +849,14 @@ export default function App() {
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <span className="font-bold tracking-tight text-sm text-zinc-100">
-                    NossoFinanceiro
+                    {contaAtiva === 'vitoria' ? 'Finanças Vitória' : 'NossoFinanceiro'}
                   </span>
                   <button
                     onClick={carregarDadosNuvem}
-                    className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full ${
-                      supabase && !erroNuvem && qtdPendentes === 0
-                        ? 'bg-emerald-500/15 text-emerald-400'
-                        : 'bg-amber-500/20 text-amber-300'
-                    }`}
+                    className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400"
                   >
                     <RefreshCw size={10} className={sincronizando ? 'animate-spin' : ''} />
-                    {sincronizando ? 'Sync...' : qtdPendentes > 0 ? `${qtdPendentes}` : 'Online'}
+                    {sincronizando ? 'Sync...' : 'Online'}
                   </button>
                 </div>
               </div>
@@ -847,7 +867,7 @@ export default function App() {
                 </h1>
               </div>
 
-              <div className="flex items-center gap-2 ml-auto shrink-0">
+              <div className="flex items-center gap-1.5 ml-auto shrink-0">
                 {abaAtiva !== 'enxoval' && (
                   <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-full px-1.5 py-1">
                     <button
@@ -856,7 +876,7 @@ export default function App() {
                     >
                       <ChevronLeft size={16} />
                     </button>
-                    <span className="text-xs md:text-sm font-medium px-1.5 min-w-[105px] md:min-w-[140px] text-center truncate">
+                    <span className="text-xs md:text-sm font-medium px-1.5 min-w-[100px] md:min-w-[140px] text-center truncate">
                       {nomeMesAno(mesSelecionado)}
                     </span>
                     <button
@@ -871,8 +891,17 @@ export default function App() {
                 <button
                   onClick={() => setModalConfigAberto(true)}
                   className="md:hidden p-2 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white shrink-0 cursor-pointer"
+                  title="Configurar Nomes"
                 >
                   <Settings size={15} />
+                </button>
+
+                <button
+                  onClick={handleTrocarUsuario}
+                  className="md:hidden p-2 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-rose-400 shrink-0 cursor-pointer"
+                  title="Trocar Usuário"
+                >
+                  <LogOut size={15} />
                 </button>
               </div>
             </div>
@@ -922,7 +951,7 @@ export default function App() {
                   <div>
                     <div className="flex items-center justify-between">
                       <p className="text-xs text-zinc-400 font-medium uppercase tracking-wider">
-                        Saldo Livre ({filtroPessoaGlobal === 'Todos' ? 'Nosso Total' : filtroPessoaGlobal})
+                        Saldo Livre ({filtroPessoaGlobal === 'Todos' ? 'Total' : filtroPessoaGlobal})
                       </p>
                       <Users size={16} className="text-emerald-400" />
                     </div>
@@ -1050,7 +1079,7 @@ export default function App() {
                   <div className="text-center py-12 bg-zinc-900/40 border border-zinc-800/60 rounded-2xl">
                     <p className="text-sm text-zinc-400">Nenhum lançamento neste mês.</p>
                     <p className="text-xs text-zinc-500 mt-1">
-                      Use o botão "+" para registrar ou importe sua planilha na aba Extrato.
+                      Use o botão "+" para registrar.
                     </p>
                   </div>
                 ) : (
@@ -1070,7 +1099,7 @@ export default function App() {
             </div>
           )}
 
-          {/* ABA 2: EXTRATO (COM BOTÃO DE IMPORTAR PLANILHA ANTIGA) */}
+          {/* ABA 2: EXTRATO */}
           {abaAtiva === 'extrato' && (
             <div className="space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1081,7 +1110,9 @@ export default function App() {
                   </p>
                 </div>
 
-                <ImportadorPlanilhaGastos onImportarDados={handleImportarPlanilhaAntiga} />
+                {contaAtiva === 'casal' && (
+                  <ImportadorPlanilhaGastos onImportarDados={handleImportarPlanilhaAntiga} />
+                )}
               </div>
 
               <div className="flex gap-2 overflow-x-auto pb-1">
@@ -1157,7 +1188,7 @@ export default function App() {
             />
           )}
 
-          {/* ABA 3: POUPANÇA & METAS */}
+          {/* ABA 3: POUPANÇA & METAS DE GASTOS DO MÊS */}
           {abaAtiva === 'metas' && (
             <div className="space-y-6">
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -1273,30 +1304,87 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* TETO DE GASTOS MENSAL (COM BOTÃO DE EDITAR METAS!) */}
                 <div className="lg:col-span-7 space-y-6">
                   <div>
-                    <h3 className="text-sm md:text-base font-semibold text-zinc-200 mb-3">
-                      Teto de Gastos Mensal
-                    </h3>
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <h3 className="text-sm md:text-base font-semibold text-zinc-200">
+                          Meta / Teto de Gastos do Mês
+                        </h3>
+                        <p className="text-xs text-zinc-400">
+                          Defina quanto pretendem gastar em cada categoria por mês
+                        </p>
+                      </div>
+
+                      {!editandoOrcamentos ? (
+                        <button
+                          onClick={abrirEdicaoOrcamentos}
+                          className="flex items-center gap-1.5 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-emerald-400 px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer"
+                        >
+                          <Pencil size={13} />
+                          Alterar Metas do Mês
+                        </button>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => setEditandoOrcamentos(false)}
+                            className="text-xs text-zinc-400 hover:text-white px-2 py-1 cursor-pointer"
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            onClick={salvarOrcamentos}
+                            className="flex items-center gap-1 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer"
+                          >
+                            <Check size={14} /> Salvar Metas
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {orcamentos.map((orc) => {
                         const gastoAtual = transacoesDoMes
                           .filter((t) => t.tipo === 'despesa' && t.categoria === orc.categoria)
                           .reduce((acc, t) => acc + t.valor, 0);
-                        const pct = Math.min(100, Math.round((gastoAtual / orc.limite) * 100));
-                        const estourou = gastoAtual > orc.limite;
+                        const pct =
+                          orc.limite > 0
+                            ? Math.min(100, Math.round((gastoAtual / orc.limite) * 100))
+                            : 0;
+                        const estourou = orc.limite > 0 && gastoAtual > orc.limite;
 
                         return (
                           <div
                             key={orc.categoria}
-                            className="bg-zinc-900/70 border border-zinc-800/80 rounded-xl p-4"
+                            className="bg-zinc-900/70 border border-zinc-800/80 rounded-xl p-4 space-y-2"
                           >
-                            <div className="flex justify-between text-xs mb-2">
+                            <div className="flex justify-between items-center text-xs">
                               <span className="font-semibold text-zinc-200">{orc.categoria}</span>
-                              <span className={estourou ? 'text-rose-400 font-bold' : 'text-zinc-400'}>
-                                {formatarMoeda(gastoAtual)} / {formatarMoeda(orc.limite)}
-                              </span>
+                              {!editandoOrcamentos ? (
+                                <span
+                                  className={estourou ? 'text-rose-400 font-bold' : 'text-zinc-400'}
+                                >
+                                  {formatarMoeda(gastoAtual)} / {formatarMoeda(orc.limite)}
+                                </span>
+                              ) : (
+                                <div className="flex items-center gap-1">
+                                  <span className="text-zinc-400 text-[11px]">R$</span>
+                                  <input
+                                    type="number"
+                                    value={orcamentosTemp[orc.categoria] ?? orc.limite}
+                                    onChange={(e) =>
+                                      setOrcamentosTemp((prev) => ({
+                                        ...prev,
+                                        [orc.categoria]: e.target.value,
+                                      }))
+                                    }
+                                    className="w-24 bg-zinc-950 border border-emerald-500/60 rounded-lg px-2 py-1 text-xs font-bold text-white text-right focus:outline-none"
+                                  />
+                                </div>
+                              )}
                             </div>
+
                             <div className="w-full h-2.5 bg-zinc-950 rounded-full overflow-hidden">
                               <div
                                 className={`h-full rounded-full ${

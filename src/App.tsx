@@ -4,6 +4,7 @@ import {
   TrendingUp,
   TrendingDown,
   PiggyBank,
+  ArrowDownLeft,
   Plus,
   Search,
   ChevronLeft,
@@ -13,6 +14,7 @@ import {
   Home,
   Target,
   Package,
+  FileText,
   Users,
   RefreshCw,
   Settings,
@@ -27,6 +29,7 @@ import {
   type ActiveTab,
   type CategoryBudget,
   type EnxovalItem,
+  type ObservacaoMes,
   ORCAMENTOS_INICIAIS,
   obterMesAtualLocal,
   formatarMoeda,
@@ -36,6 +39,7 @@ import { CardTransacao } from './components/CardTransacao';
 import { ModalTransacao } from './components/ModalTransacao';
 import { ModalConfigCasal } from './components/ModalConfigCasal';
 import { AbaEnxoval } from './components/AbaEnxoval';
+import { AbaObservacoes } from './components/AbaObservacoes';
 
 export default function App() {
   // --- NOMES DO CASAL ---
@@ -46,6 +50,7 @@ export default function App() {
   // --- NAVEGAÇÃO E FILTROS ---
   const [abaAtiva, setAbaAtiva] = useState<ActiveTab>('home');
   const [modalAberto, setModalAberto] = useState(false);
+  const [tipoInicialModal, setTipoInicialModal] = useState<TransactionType>('despesa');
   const [transacaoEditando, setTransacaoEditando] = useState<Transaction | null>(null);
   const [filtroPessoaGlobal, setFiltroPessoaGlobal] = useState<string>('Todos');
   const [mesSelecionado, setMesSelecionado] = useState(() => obterMesAtualLocal());
@@ -69,6 +74,19 @@ export default function App() {
   // --- DADOS DO ENXOVAL ---
   const [itensEnxoval, setItensEnxoval] = useState<EnxovalItem[]>(() => {
     const salvo = localStorage.getItem('@financas:enxoval_casal');
+    if (salvo) {
+      try {
+        return JSON.parse(salvo);
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  });
+
+  // --- DADOS DE OBSERVAÇÕES DO MÊS ---
+  const [observacoesMes, setObservacoesMes] = useState<ObservacaoMes[]>(() => {
+    const salvo = localStorage.getItem('@financas:observacoes_casal');
     if (salvo) {
       try {
         return JSON.parse(salvo);
@@ -174,6 +192,27 @@ export default function App() {
         setItensEnxoval(formatadosEnxoval);
       }
 
+      // Carrega Observações do Mês
+      const { data: obsData } = await supabase
+        .from('observacoes_mes')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(1000);
+
+      if (obsData) {
+        const formatadasObs: ObservacaoMes[] = obsData.map((row: any) => ({
+          id: String(row.id),
+          mes: row.mes,
+          autor: row.autor,
+          titulo: row.titulo,
+          texto: row.texto,
+          valor: row.valor ? Number(row.valor) : undefined,
+          resolvido: Boolean(row.resolvido),
+          dataCriacao: row.data_criacao,
+        }));
+        setObservacoesMes(formatadasObs);
+      }
+
       const { data: configData } = await supabase
         .from('config_casal')
         .select('*')
@@ -204,6 +243,9 @@ export default function App() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'enxoval' }, () => {
         carregarDadosNuvem();
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'observacoes_mes' }, () => {
+        carregarDadosNuvem();
+      })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'config_casal' }, () => {
         carregarDadosNuvem();
       })
@@ -223,6 +265,10 @@ export default function App() {
   }, [itensEnxoval]);
 
   useEffect(() => {
+    localStorage.setItem('@financas:observacoes_casal', JSON.stringify(observacoesMes));
+  }, [observacoesMes]);
+
+  useEffect(() => {
     localStorage.setItem('@financas:pessoa1', pessoa1);
     localStorage.setItem('@financas:pessoa2', pessoa2);
   }, [pessoa1, pessoa2]);
@@ -235,7 +281,7 @@ export default function App() {
     );
   };
 
-  // --- CÁLCULOS FINANCEIROS ---
+  // --- CÁLCULOS FINANCEIROS (COM SUPORTE A RESGATE DE POUPANÇA) ---
   const transacoesDoMes = useMemo(() => {
     return transacoes
       .filter((t) => t.data.startsWith(mesSelecionado))
@@ -247,14 +293,22 @@ export default function App() {
     let receitas = 0;
     let despesas = 0;
     let poupadoMes = 0;
+    let resgatadoMes = 0;
 
     transacoesDoMes.forEach((t) => {
       if (t.tipo === 'receita') receitas += t.valor;
       if (t.tipo === 'despesa') despesas += t.valor;
       if (t.tipo === 'poupanca') poupadoMes += t.valor;
+      if (t.tipo === 'resgate_poupanca') resgatadoMes += t.valor;
     });
 
-    return { receitas, despesas, poupadoMes, saldoLivre: receitas - despesas - poupadoMes };
+    return {
+      receitas,
+      despesas,
+      poupadoMes,
+      resgatadoMes,
+      saldoLivre: receitas - despesas - poupadoMes,
+    };
   }, [transacoesDoMes]);
 
   const resumoPorPessoa = useMemo(() => {
@@ -268,20 +322,39 @@ export default function App() {
       p1Gastos: calc(pessoa1, 'despesa'),
       p2Gastos: calc(pessoa2, 'despesa'),
       casalGastos: calc('Casal', 'despesa'),
-      p1Poupanca: calc(pessoa1, 'poupanca'),
-      p2Poupanca: calc(pessoa2, 'poupanca'),
-      casalPoupanca: calc('Casal', 'poupanca'),
+      p1Poupanca: calc(pessoa1, 'poupanca') - calc(pessoa1, 'resgate_poupanca'),
+      p2Poupanca: calc(pessoa2, 'poupanca') - calc(pessoa2, 'resgate_poupanca'),
+      casalPoupanca: calc('Casal', 'poupanca') - calc('Casal', 'resgate_poupanca'),
     };
   }, [transacoes, mesSelecionado, pessoa1, pessoa2]);
 
-  const totalPoupancaAcumulada = useMemo(() => {
-    return transacoes
+  // Poupança Acumulada Líquida = Tudo que Guardou - Tudo que Retirou
+  const dadosPoupancaGlobal = useMemo(() => {
+    const filtradas = transacoes.filter(
+      (t) => filtroPessoaGlobal === 'Todos' || t.responsavel === filtroPessoaGlobal
+    );
+
+    const totalGuardado = filtradas
       .filter((t) => t.tipo === 'poupanca')
-      .filter((t) => filtroPessoaGlobal === 'Todos' || t.responsavel === filtroPessoaGlobal)
       .reduce((acc, t) => acc + t.valor, 0);
+
+    const totalRetirado = filtradas
+      .filter((t) => t.tipo === 'resgate_poupanca')
+      .reduce((acc, t) => acc + t.valor, 0);
+
+    const historicoMovimentacoes = filtradas
+      .filter((t) => t.tipo === 'poupanca' || t.tipo === 'resgate_poupanca')
+      .sort((a, b) => b.data.localeCompare(a.data));
+
+    return {
+      saldoAtual: totalGuardado - totalRetirado,
+      totalGuardado,
+      totalRetirado,
+      historicoMovimentacoes,
+    };
   }, [transacoes, filtroPessoaGlobal]);
 
-  // --- AÇÕES DE TRANSAÇÃO (CRIAR E EDITAR) ---
+  // --- AÇÕES DE TRANSAÇÃO ---
   const handleSalvarTransacao = async (dados: {
     id?: string;
     tipo: TransactionType;
@@ -296,7 +369,6 @@ export default function App() {
   }) => {
     setSalvando(true);
 
-    // MODO EDIÇÃO DE LANÇAMENTO EXISTENTE
     if (dados.id) {
       const atualizada: Transaction = {
         id: dados.id,
@@ -341,7 +413,6 @@ export default function App() {
       return;
     }
 
-    // MODO NOVO LANÇAMENTO
     const novasTransacoes: Transaction[] = [];
     const numParcelas =
       dados.tipo === 'despesa' && dados.metodoPagamento === 'Cartão de Crédito'
@@ -474,6 +545,39 @@ export default function App() {
     }
   };
 
+  // --- AÇÕES DAS OBSERVAÇÕES DO MÊS ---
+  const handleSalvarObservacao = async (obs: ObservacaoMes) => {
+    setObservacoesMes((prev) => {
+      const existe = prev.some((o) => o.id === obs.id);
+      return existe ? prev.map((o) => (o.id === obs.id ? obs : o)) : [obs, ...prev];
+    });
+
+    if (supabase) {
+      await supabase.from('observacoes_mes').upsert({
+        id: obs.id,
+        mes: obs.mes,
+        autor: obs.autor,
+        titulo: obs.titulo,
+        texto: obs.texto,
+        valor: obs.valor || 0,
+        resolvido: obs.resolvido,
+        data_criacao: obs.dataCriacao,
+      });
+    }
+  };
+
+  const handleAlternarResolvidoObs = async (obs: ObservacaoMes) => {
+    const atualizada = { ...obs, resolvido: !obs.resolvido };
+    await handleSalvarObservacao(atualizada);
+  };
+
+  const handleExcluirObservacao = async (id: string) => {
+    setObservacoesMes((prev) => prev.filter((o) => o.id !== id));
+    if (supabase) {
+      await supabase.from('observacoes_mes').delete().eq('id', id);
+    }
+  };
+
   const salvarConfigCasal = async (novaMeta?: number, nP1?: string, nP2?: string) => {
     const metaFinal = novaMeta ?? metaPoupanca;
     const p1Final = (nP1 ?? pessoa1).trim() || 'Juan';
@@ -547,10 +651,12 @@ export default function App() {
   }, [transacoesDoMes]);
 
   const qtdPendentes = transacoes.filter((t) => t.pendenteSync).length;
+  const qtdObsDoMes = observacoesMes.filter((o) => o.mes === mesSelecionado).length;
 
   const itensMenu = [
     { id: 'home' as ActiveTab, label: 'Início', icone: Home },
     { id: 'extrato' as ActiveTab, label: 'Extrato', icone: List },
+    { id: 'observacoes' as ActiveTab, label: 'Notas do Mês', icone: FileText, badge: qtdObsDoMes },
     { id: 'enxoval' as ActiveTab, label: 'Enxoval Casa', icone: Package },
     { id: 'metas' as ActiveTab, label: 'Poupança', icone: Target },
     { id: 'graficos' as ActiveTab, label: 'Análise', icone: PieChartIcon },
@@ -586,6 +692,7 @@ export default function App() {
           <button
             onClick={() => {
               setTransacaoEditando(null);
+              setTipoInicialModal('despesa');
               setModalAberto(true);
             }}
             className="w-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold py-3 px-4 rounded-xl text-sm shadow-lg shadow-emerald-500/15 flex items-center justify-center gap-2 transition cursor-pointer"
@@ -602,14 +709,21 @@ export default function App() {
                 <button
                   key={item.id}
                   onClick={() => setAbaAtiva(item.id)}
-                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition cursor-pointer ${
+                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition cursor-pointer ${
                     ativo
                       ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-semibold'
                       : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50'
                   }`}
                 >
-                  <Icone size={18} />
-                  <span>{item.label}</span>
+                  <span className="flex items-center gap-3">
+                    <Icone size={18} />
+                    <span>{item.label}</span>
+                  </span>
+                  {item.badge ? (
+                    <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-bold">
+                      {item.badge}
+                    </span>
+                  ) : null}
                 </button>
               );
             })}
@@ -713,7 +827,7 @@ export default function App() {
               </div>
             )}
 
-            {abaAtiva !== 'enxoval' && (
+            {abaAtiva !== 'enxoval' && abaAtiva !== 'observacoes' && (
               <div className="grid grid-cols-4 gap-1.5 bg-zinc-900/90 p-1 rounded-xl border border-zinc-800/80 w-full">
                 {(['Todos', pessoa1, pessoa2, 'Casal'] as const).map((item) => (
                   <button
@@ -827,19 +941,30 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div
-                    onClick={() => setAbaAtiva('metas')}
-                    className="bg-sky-950/25 border border-sky-900/40 rounded-xl p-3 flex items-center justify-between cursor-pointer hover:bg-sky-950/40 transition"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <PiggyBank size={18} className="text-sky-400 shrink-0" />
-                      <span className="text-xs text-sky-200 font-medium truncate">
-                        Poupança Total:
+                  <div className="grid grid-cols-2 gap-2">
+                    <div
+                      onClick={() => setAbaAtiva('metas')}
+                      className="bg-sky-950/25 border border-sky-900/40 rounded-xl p-2.5 flex flex-col justify-between cursor-pointer hover:bg-sky-950/40 transition"
+                    >
+                      <span className="text-[11px] text-sky-300 flex items-center gap-1 font-medium">
+                        <PiggyBank size={14} /> Poupança Atual
                       </span>
+                      <strong className="text-xs md:text-sm text-white mt-1">
+                        {formatarMoeda(dadosPoupancaGlobal.saldoAtual)}
+                      </strong>
                     </div>
-                    <strong className="text-xs md:text-sm text-sky-300 shrink-0">
-                      {formatarMoeda(totalPoupancaAcumulada)}
-                    </strong>
+
+                    <div
+                      onClick={() => setAbaAtiva('observacoes')}
+                      className="bg-emerald-950/25 border border-emerald-900/40 rounded-xl p-2.5 flex flex-col justify-between cursor-pointer hover:bg-emerald-950/40 transition"
+                    >
+                      <span className="text-[11px] text-emerald-300 flex items-center gap-1 font-medium">
+                        <FileText size={14} /> Notas do Mês
+                      </span>
+                      <strong className="text-xs md:text-sm text-white mt-1">
+                        {qtdObsDoMes} anotação(ões)
+                      </strong>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -893,17 +1018,25 @@ export default function App() {
                 </div>
 
                 <div className="flex gap-2 overflow-x-auto pb-1">
-                  {(['todos', 'despesa', 'receita', 'poupanca'] as const).map((tipo) => (
+                  {(
+                    [
+                      { id: 'todos', label: 'Todos' },
+                      { id: 'despesa', label: 'Despesas' },
+                      { id: 'receita', label: 'Receitas' },
+                      { id: 'poupanca', label: 'Guardado' },
+                      { id: 'resgate_poupanca', label: 'Retiradas Poupança' },
+                    ] as const
+                  ).map((tipo) => (
                     <button
-                      key={tipo}
-                      onClick={() => setFiltroTipo(tipo)}
-                      className={`px-3.5 py-1.5 rounded-full text-xs font-medium capitalize transition cursor-pointer shrink-0 ${
-                        filtroTipo === tipo
+                      key={tipo.id}
+                      onClick={() => setFiltroTipo(tipo.id)}
+                      className={`px-3.5 py-1.5 rounded-full text-xs font-medium transition cursor-pointer shrink-0 ${
+                        filtroTipo === tipo.id
                           ? 'bg-emerald-500 text-zinc-950 font-semibold'
                           : 'bg-zinc-900 text-zinc-400 border border-zinc-800 hover:text-zinc-200'
                       }`}
                     >
-                      {tipo === 'poupanca' ? 'Poupança' : tipo}
+                      {tipo.label}
                     </button>
                   ))}
                 </div>
@@ -934,7 +1067,20 @@ export default function App() {
             </div>
           )}
 
-          {/* ABA NOVA: ENXOVAL DA CASA NOVA */}
+          {/* ABA NOVA: OBSERVAÇÕES DO MÊS */}
+          {abaAtiva === 'observacoes' && (
+            <AbaObservacoes
+              mesSelecionado={mesSelecionado}
+              observacoes={observacoesMes}
+              pessoa1={pessoa1}
+              pessoa2={pessoa2}
+              onSalvarObservacao={handleSalvarObservacao}
+              onAlternarResolvido={handleAlternarResolvidoObs}
+              onExcluirObservacao={handleExcluirObservacao}
+            />
+          )}
+
+          {/* ABA: ENXOVAL DA CASA NOVA */}
           {abaAtiva === 'enxoval' && (
             <AbaEnxoval
               itens={itensEnxoval}
@@ -945,121 +1091,188 @@ export default function App() {
             />
           )}
 
-          {/* ABA 3: POUPANÇA & METAS */}
+          {/* ABA 3: POUPANÇA & METAS (COM OPÇÃO DE RETIRAR VALOR DA POUPANÇA) */}
           {abaAtiva === 'metas' && (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-              <div className="lg:col-span-5 bg-gradient-to-br from-sky-950/50 to-zinc-900 border border-sky-900/50 rounded-2xl p-5 h-fit">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-sky-400">
-                    <PiggyBank size={20} />
-                    <h2 className="font-bold text-sm uppercase tracking-wider">Poupança do Casal</h2>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setNovaMetaInput(metaPoupanca.toString());
-                      setEditandoMeta(!editandoMeta);
-                    }}
-                    className="text-xs text-sky-400 hover:underline cursor-pointer"
-                  >
-                    {editandoMeta ? 'Cancelar' : 'Editar Meta'}
-                  </button>
-                </div>
-
-                <p className="text-3xl font-extrabold text-white mt-3">
-                  {formatarMoeda(totalPoupancaAcumulada)}
-                </p>
-                <p className="text-xs text-zinc-400 mt-1">
-                  Meta: {formatarMoeda(metaPoupanca)} (
-                  {Math.min(100, Math.round((totalPoupancaAcumulada / metaPoupanca) * 100))}%)
-                </p>
-
-                {editandoMeta && (
-                  <div className="mt-3 flex gap-2">
-                    <input
-                      type="number"
-                      value={novaMetaInput}
-                      onChange={(e) => setNovaMetaInput(e.target.value)}
-                      className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white"
-                    />
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                <div className="lg:col-span-5 bg-gradient-to-br from-sky-950/50 to-zinc-900 border border-sky-900/50 rounded-2xl p-5 h-fit space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-sky-400">
+                      <PiggyBank size={20} />
+                      <h2 className="font-bold text-sm uppercase tracking-wider">
+                        Saldo Atual na Poupança
+                      </h2>
+                    </div>
                     <button
                       onClick={() => {
-                        const val = Number(novaMetaInput);
-                        if (val > 0) {
-                          setMetaPoupanca(val);
-                          salvarConfigCasal(val);
-                        }
-                        setEditandoMeta(false);
+                        setNovaMetaInput(metaPoupanca.toString());
+                        setEditandoMeta(!editandoMeta);
                       }}
-                      className="bg-sky-500 text-zinc-950 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer"
+                      className="text-xs text-sky-400 hover:underline cursor-pointer"
                     >
-                      <Check size={14} /> Salvar
+                      {editandoMeta ? 'Cancelar' : 'Editar Meta'}
                     </button>
                   </div>
-                )}
 
-                <div className="w-full h-3 bg-zinc-950 rounded-full overflow-hidden mt-4 border border-zinc-800">
-                  <div
-                    className="h-full bg-sky-400 rounded-full transition-all duration-500"
-                    style={{
-                      width: `${Math.min(100, (totalPoupancaAcumulada / metaPoupanca) * 100)}%`,
-                    }}
-                  />
-                </div>
-
-                <div className="grid grid-cols-3 gap-2 mt-5 pt-4 border-t border-sky-900/40 text-center text-xs">
                   <div>
-                    <span className="text-zinc-400 block truncate">{pessoa1}</span>
-                    <strong className="text-sky-300 block truncate">{formatarMoeda(resumoPorPessoa.p1Poupanca)}</strong>
+                    <p className="text-3xl font-extrabold text-white">
+                      {formatarMoeda(dadosPoupancaGlobal.saldoAtual)}
+                    </p>
+                    <p className="text-xs text-zinc-400 mt-1">
+                      Meta: {formatarMoeda(metaPoupanca)} (
+                      {Math.max(
+                        0,
+                        Math.min(
+                          100,
+                          Math.round((dadosPoupancaGlobal.saldoAtual / metaPoupanca) * 100)
+                        )
+                      )}
+                      %)
+                    </p>
                   </div>
-                  <div>
-                    <span className="text-zinc-400 block truncate">{pessoa2}</span>
-                    <strong className="text-sky-300 block truncate">{formatarMoeda(resumoPorPessoa.p2Poupanca)}</strong>
-                  </div>
-                  <div>
-                    <span className="text-zinc-400 block truncate">Juntos</span>
-                    <strong className="text-sky-300 block truncate">{formatarMoeda(resumoPorPessoa.casalPoupanca)}</strong>
-                  </div>
-                </div>
-              </div>
 
-              <div className="lg:col-span-7">
-                <h3 className="text-sm md:text-base font-semibold text-zinc-200 mb-3">
-                  Teto de Gastos Mensal
-                </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {orcamentos.map((orc) => {
-                    const gastoAtual = transacoesDoMes
-                      .filter((t) => t.tipo === 'despesa' && t.categoria === orc.categoria)
-                      .reduce((acc, t) => acc + t.valor, 0);
-                    const pct = Math.min(100, Math.round((gastoAtual / orc.limite) * 100));
-                    const estourou = gastoAtual > orc.limite;
+                  {/* BOTÕES RÁPIDOS DE GUARDAR OU RETIRAR DA POUPANÇA */}
+                  <div className="grid grid-cols-2 gap-2.5 pt-1">
+                    <button
+                      onClick={() => {
+                        setTransacaoEditando(null);
+                        setTipoInicialModal('poupanca');
+                        setModalAberto(true);
+                      }}
+                      className="bg-sky-500 hover:bg-sky-400 text-zinc-950 font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <Plus size={15} strokeWidth={2.5} /> Guardar Valor
+                    </button>
 
-                    return (
-                      <div
-                        key={orc.categoria}
-                        className="bg-zinc-900/70 border border-zinc-800/80 rounded-xl p-4"
+                    <button
+                      onClick={() => {
+                        setTransacaoEditando(null);
+                        setTipoInicialModal('resgate_poupanca');
+                        setModalAberto(true);
+                      }}
+                      className="bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <ArrowDownLeft size={15} /> Retirar Valor
+                    </button>
+                  </div>
+
+                  {editandoMeta && (
+                    <div className="flex gap-2">
+                      <input
+                        type="number"
+                        value={novaMetaInput}
+                        onChange={(e) => setNovaMetaInput(e.target.value)}
+                        className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white"
+                      />
+                      <button
+                        onClick={() => {
+                          const val = Number(novaMetaInput);
+                          if (val > 0) {
+                            setMetaPoupanca(val);
+                            salvarConfigCasal(val);
+                          }
+                          setEditandoMeta(false);
+                        }}
+                        className="bg-sky-500 text-zinc-950 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer"
                       >
-                        <div className="flex justify-between text-xs mb-2">
-                          <span className="font-semibold text-zinc-200">{orc.categoria}</span>
-                          <span className={estourou ? 'text-rose-400 font-bold' : 'text-zinc-400'}>
-                            {formatarMoeda(gastoAtual)} / {formatarMoeda(orc.limite)}
-                          </span>
-                        </div>
-                        <div className="w-full h-2.5 bg-zinc-950 rounded-full overflow-hidden">
+                        <Check size={14} /> Salvar
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="w-full h-3 bg-zinc-950 rounded-full overflow-hidden border border-zinc-800">
+                    <div
+                      className="h-full bg-sky-400 rounded-full transition-all duration-500"
+                      style={{
+                        width: `${Math.max(
+                          0,
+                          Math.min(100, (dadosPoupancaGlobal.saldoAtual / metaPoupanca) * 100)
+                        )}%`,
+                      }}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 pt-2 text-xs">
+                    <div className="bg-zinc-950/60 border border-zinc-800/80 rounded-xl p-2.5">
+                      <span className="text-zinc-400 block">Total Já Guardado</span>
+                      <strong className="text-sky-300">
+                        {formatarMoeda(dadosPoupancaGlobal.totalGuardado)}
+                      </strong>
+                    </div>
+                    <div className="bg-zinc-950/60 border border-zinc-800/80 rounded-xl p-2.5">
+                      <span className="text-zinc-400 block">Total Já Retirado</span>
+                      <strong className="text-amber-400">
+                        - {formatarMoeda(dadosPoupancaGlobal.totalRetirado)}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="lg:col-span-7 space-y-6">
+                  <div>
+                    <h3 className="text-sm md:text-base font-semibold text-zinc-200 mb-3">
+                      Teto de Gastos Mensal
+                    </h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {orcamentos.map((orc) => {
+                        const gastoAtual = transacoesDoMes
+                          .filter((t) => t.tipo === 'despesa' && t.categoria === orc.categoria)
+                          .reduce((acc, t) => acc + t.valor, 0);
+                        const pct = Math.min(100, Math.round((gastoAtual / orc.limite) * 100));
+                        const estourou = gastoAtual > orc.limite;
+
+                        return (
                           <div
-                            className={`h-full rounded-full ${
-                              estourou
-                                ? 'bg-rose-500'
-                                : pct > 80
-                                ? 'bg-amber-400'
-                                : 'bg-emerald-400'
-                            }`}
-                            style={{ width: `${pct}%` }}
+                            key={orc.categoria}
+                            className="bg-zinc-900/70 border border-zinc-800/80 rounded-xl p-4"
+                          >
+                            <div className="flex justify-between text-xs mb-2">
+                              <span className="font-semibold text-zinc-200">{orc.categoria}</span>
+                              <span className={estourou ? 'text-rose-400 font-bold' : 'text-zinc-400'}>
+                                {formatarMoeda(gastoAtual)} / {formatarMoeda(orc.limite)}
+                              </span>
+                            </div>
+                            <div className="w-full h-2.5 bg-zinc-950 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${
+                                  estourou
+                                    ? 'bg-rose-500'
+                                    : pct > 80
+                                    ? 'bg-amber-400'
+                                    : 'bg-emerald-400'
+                                }`}
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* HISTÓRICO DE DEPÓSITOS E RETIRADAS DA POUPANÇA */}
+                  <div>
+                    <h3 className="text-sm md:text-base font-semibold text-zinc-200 mb-3">
+                      Histórico da Poupança (Depósitos e Retiradas)
+                    </h3>
+                    {dadosPoupancaGlobal.historicoMovimentacoes.length === 0 ? (
+                      <p className="text-xs text-zinc-500 bg-zinc-900/40 border border-zinc-800/60 rounded-xl p-4">
+                        Nenhuma movimentação na poupança ainda.
+                      </p>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {dadosPoupancaGlobal.historicoMovimentacoes.slice(0, 10).map((t) => (
+                          <CardTransacao
+                            key={t.id}
+                            transacao={t}
+                            pessoa1={pessoa1}
+                            onEditar={handleAbrirEditarTransacao}
+                            onExcluir={handleExcluir}
                           />
-                        </div>
+                        ))}
                       </div>
-                    );
-                  })}
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -1100,14 +1313,14 @@ export default function App() {
 
         {/* ==================== BOTTOM NAVIGATION MOBILE ==================== */}
         <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800/80">
-          <div className="w-full px-1 h-16 grid grid-cols-5 items-center relative">
+          <div className="w-full px-1 h-16 grid grid-cols-6 items-center relative">
             <button
               onClick={() => setAbaAtiva('home')}
               className={`flex flex-col items-center justify-center h-full gap-1 text-[10px] transition cursor-pointer ${
                 abaAtiva === 'home' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
               }`}
             >
-              <Home size={19} />
+              <Home size={18} />
               <span>Início</span>
             </button>
 
@@ -1117,22 +1330,19 @@ export default function App() {
                 abaAtiva === 'extrato' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
               }`}
             >
-              <List size={19} />
+              <List size={18} />
               <span>Extrato</span>
             </button>
 
-            {/* BOTÃO CENTRAL DE NOVO LANÇAMENTO */}
-            <div className="flex items-center justify-center">
-              <button
-                onClick={() => {
-                  setTransacaoEditando(null);
-                  setModalAberto(true);
-                }}
-                className="-top-4 relative w-13 h-13 rounded-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 shadow-lg shadow-emerald-500/25 flex items-center justify-center transition transform active:scale-95 cursor-pointer"
-              >
-                <Plus size={26} strokeWidth={2.5} />
-              </button>
-            </div>
+            <button
+              onClick={() => setAbaAtiva('observacoes')}
+              className={`flex flex-col items-center justify-center h-full gap-1 text-[10px] transition cursor-pointer ${
+                abaAtiva === 'observacoes' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
+              }`}
+            >
+              <FileText size={18} />
+              <span>Notas</span>
+            </button>
 
             <button
               onClick={() => setAbaAtiva('enxoval')}
@@ -1140,7 +1350,7 @@ export default function App() {
                 abaAtiva === 'enxoval' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
               }`}
             >
-              <Package size={19} />
+              <Package size={18} />
               <span>Enxoval</span>
             </button>
 
@@ -1150,9 +1360,24 @@ export default function App() {
                 abaAtiva === 'metas' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
               }`}
             >
-              <Target size={19} />
+              <Target size={18} />
               <span>Poupança</span>
             </button>
+
+            {/* BOTÃO RÁPIDO DE NOVO LANÇAMENTO MOBILE */}
+            <div className="flex items-center justify-center">
+              <button
+                onClick={() => {
+                  setTransacaoEditando(null);
+                  setTipoInicialModal('despesa');
+                  setModalAberto(true);
+                }}
+                className="w-11 h-11 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 shadow-lg shadow-emerald-500/25 flex items-center justify-center transition transform active:scale-95 cursor-pointer"
+                title="Novo Lançamento"
+              >
+                <Plus size={22} strokeWidth={2.5} />
+              </button>
+            </div>
           </div>
         </nav>
 
@@ -1167,6 +1392,7 @@ export default function App() {
           pessoa2={pessoa2}
           salvando={salvando}
           transacaoEditando={transacaoEditando}
+          tipoInicial={tipoInicialModal}
           onSalvar={handleSalvarTransacao}
         />
 

@@ -2,6 +2,7 @@ import {
   TrendingUp,
   TrendingDown,
   PiggyBank,
+  ArrowDownLeft,
   MapPin,
   Calendar,
   CreditCard,
@@ -21,6 +22,7 @@ interface CardTransacaoProps {
 export function CardTransacao({ transacao, pessoa1, onEditar, onExcluir }: CardTransacaoProps) {
   const isReceita = transacao.tipo === 'receita';
   const isPoupanca = transacao.tipo === 'poupanca';
+  const isResgate = transacao.tipo === 'resgate_poupanca';
 
   const corBadgePessoa =
     transacao.responsavel === pessoa1
@@ -38,6 +40,8 @@ export function CardTransacao({ transacao, pessoa1, onEditar, onExcluir }: CardT
               ? 'bg-emerald-500/15 text-emerald-400'
               : isPoupanca
               ? 'bg-sky-500/15 text-sky-400'
+              : isResgate
+              ? 'bg-amber-500/15 text-amber-400'
               : 'bg-rose-500/15 text-rose-400'
           }`}
         >
@@ -45,6 +49,8 @@ export function CardTransacao({ transacao, pessoa1, onEditar, onExcluir }: CardT
             <TrendingUp size={18} />
           ) : isPoupanca ? (
             <PiggyBank size={18} />
+          ) : isResgate ? (
+            <ArrowDownLeft size={18} />
           ) : (
             <TrendingDown size={18} />
           )}
@@ -60,6 +66,11 @@ export function CardTransacao({ transacao, pessoa1, onEditar, onExcluir }: CardT
             >
               {transacao.responsavel}
             </span>
+            {isResgate && (
+              <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded font-semibold">
+                Retirada Poupança
+              </span>
+            )}
             {transacao.parcelaInfo && (
               <span className="text-[10px] bg-zinc-800 text-zinc-300 px-1.5 py-0.5 rounded font-semibold">
                 {transacao.parcelaInfo}
@@ -102,10 +113,16 @@ export function CardTransacao({ transacao, pessoa1, onEditar, onExcluir }: CardT
       <div className="flex flex-col items-end shrink-0">
         <span
           className={`font-bold text-sm md:text-base ${
-            isReceita ? 'text-emerald-400' : isPoupanca ? 'text-sky-400' : 'text-rose-400'
+            isReceita
+              ? 'text-emerald-400'
+              : isPoupanca
+              ? 'text-sky-400'
+              : isResgate
+              ? 'text-amber-400'
+              : 'text-rose-400'
           }`}
         >
-          {isReceita ? '+' : '-'} {formatarMoeda(transacao.valor)}
+          {isReceita || isPoupanca ? '+' : '-'} {formatarMoeda(transacao.valor)}
         </span>
 
         <div className="flex items-center gap-1 mt-1">

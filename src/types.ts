@@ -1,6 +1,6 @@
-export type TransactionType = 'despesa' | 'receita' | 'poupanca';
+export type TransactionType = 'despesa' | 'receita' | 'poupanca' | 'resgate_poupanca';
 export type PaymentMethod = 'Pix/Débito' | 'Cartão de Crédito' | 'Dinheiro';
-export type ActiveTab = 'home' | 'extrato' | 'metas' | 'enxoval' | 'graficos';
+export type ActiveTab = 'home' | 'extrato' | 'metas' | 'enxoval' | 'observacoes' | 'graficos';
 export type PrioridadeItem = 'Alta' | 'Média' | 'Baixa';
 
 export interface Transaction {
@@ -28,6 +28,17 @@ export interface EnxovalItem {
   comprado: boolean;
 }
 
+export interface ObservacaoMes {
+  id: string;
+  mes: string; // YYYY-MM
+  autor: string;
+  titulo: string;
+  texto: string;
+  valor?: number;
+  resolvido: boolean;
+  dataCriacao: string; // YYYY-MM-DD
+}
+
 export interface CategoryBudget {
   categoria: string;
   limite: number;
@@ -53,13 +64,21 @@ export const CATEGORIAS_DESPESA = [
   'Outros',
 ];
 
-export const CATEGORIAS_RECEITA = ['Salário', 'Freelance', 'Rendimentos', 'Outros'];
+export const CATEGORIAS_RECEITA = ['Salário', 'Freelance', 'Rendimentos', 'Reembolso/Pix', 'Outros'];
 
 export const CATEGORIAS_POUPANCA = [
   'Reserva do Casal',
   'Casamento / Casa',
   'Investimentos',
   'Meta Individual',
+];
+
+export const CATEGORIAS_RESGATE = [
+  'Emergência / Imprevisto',
+  'Compra para Casa / Enxoval',
+  'Pagamento de Conta',
+  'Uso Pessoal',
+  'Outros',
 ];
 
 export const ORCAMENTOS_INICIAIS: CategoryBudget[] = [

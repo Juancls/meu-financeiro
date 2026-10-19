@@ -671,7 +671,12 @@ export default function App() {
     }
   };
 
-  const salvarConfigCasal = async (novaMeta?: number, nP1?: string, nP2?: string) => {
+const salvarConfigCasal = async (
+    novaMeta?: number,
+    nP1?: string,
+    nP2?: string,
+    novaSenha?: string
+  ) => {
     const metaFinal = novaMeta ?? metaPoupanca;
     const p1Final = (nP1 ?? pessoa1).trim() || 'Juan';
     const p2Final = (nP2 ?? pessoa2).trim() || 'Noiva';
@@ -680,14 +685,22 @@ export default function App() {
     setPessoa2(p2Final);
     setFiltroPessoaGlobal('Todos');
 
+    if (novaSenha && contaAtiva) {
+      localStorage.setItem(`@financas:senha_${contaAtiva}`, novaSenha);
+    }
+
     if (supabase) {
-      await supabase.from('config_casal').upsert({
+      const payload: any = {
         id: idConfigBanco,
         meta_poupanca: metaFinal,
         pessoa1: p1Final,
         pessoa2: p2Final,
         orcamentos,
-      });
+      };
+      if (novaSenha) {
+        payload.senha = novaSenha;
+      }
+      await supabase.from('config_casal').upsert(payload);
     }
   };
 
@@ -1552,7 +1565,9 @@ export default function App() {
           onFechar={() => setModalConfigAberto(false)}
           pessoa1={pessoa1}
           pessoa2={pessoa2}
-          onSalvarNomes={(novoP1, novoP2) => salvarConfigCasal(metaPoupanca, novoP1, novoP2)}
+          onSalvarNomes={(novoP1, novoP2, novaSenha) =>
+            salvarConfigCasal(metaPoupanca, novoP1, novoP2, novaSenha)
+          }
         />
       </div>
     </div>

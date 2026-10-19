@@ -40,6 +40,7 @@ import { ModalTransacao } from './components/ModalTransacao';
 import { ModalConfigCasal } from './components/ModalConfigCasal';
 import { AbaEnxoval } from './components/AbaEnxoval';
 import { AbaObservacoes } from './components/AbaObservacoes';
+import { ImportadorPlanilhaGastos } from './components/ImportadorPlanilhaGastos';
 
 export default function App() {
   // --- NOMES DO CASAL ---
@@ -141,7 +142,7 @@ export default function App() {
         .select('*')
         .order('data', { ascending: false })
         .order('created_at', { ascending: false })
-        .limit(2000);
+        .limit(3000);
 
       if (transError) {
         setErroNuvem(`Aviso de sincronização: ${transError.message}`);
@@ -281,7 +282,7 @@ export default function App() {
     );
   };
 
-  // --- CÁLCULOS FINANCEIROS (COM SUPORTE A RESGATE DE POUPANÇA) ---
+  // --- CÁLCULOS FINANCEIROS ---
   const transacoesDoMes = useMemo(() => {
     return transacoes
       .filter((t) => t.data.startsWith(mesSelecionado))
@@ -328,7 +329,6 @@ export default function App() {
     };
   }, [transacoes, mesSelecionado, pessoa1, pessoa2]);
 
-  // Poupança Acumulada Líquida = Tudo que Guardou - Tudo que Retirou
   const dadosPoupancaGlobal = useMemo(() => {
     const filtradas = transacoes.filter(
       (t) => filtroPessoaGlobal === 'Todos' || t.responsavel === filtroPessoaGlobal
@@ -353,6 +353,68 @@ export default function App() {
       historicoMovimentacoes,
     };
   }, [transacoes, filtroPessoaGlobal]);
+
+  // --- IMPORTAÇÃO EM LOTE DA PLANILHA ANTIGA (JAN A JUL) ---
+  const handleImportarPlanilhaAntiga = async (
+    novasTransacoes: Transaction[],
+    novasObservacoes: ObservacaoMes[]
+  ) => {
+    // 1. Atualiza no estado local sem duplicar IDs
+    setTransacoes((prev) => {
+      const mapa = new Map<string, Transaction>();
+      prev.forEach((t) => mapa.set(t.id, t));
+      novasTransacoes.forEach((t) => mapa.set(t.id, t));
+      return Array.from(mapa.values());
+    });
+
+    setObservacoesMes((prev) => {
+      const mapa = new Map<string, ObservacaoMes>();
+      prev.forEach((o) => mapa.set(o.id, o));
+      novasObservacoes.forEach((o) => mapa.set(o.id, o));
+      return Array.from(mapa.values());
+    });
+
+    // 2. Envia para o Supabase
+    if (supabase) {
+      const payloadTrans = novasTransacoes.map((t) => ({
+        id: t.id,
+        tipo: t.tipo,
+        valor: t.valor,
+        data: t.data,
+        local: t.local,
+        categoria: t.categoria,
+        tags: t.tags,
+        metodo_pagamento: t.metodoPagamento,
+        parcela_info: t.parcelaInfo || null,
+        responsavel: t.responsavel,
+      }));
+
+      const { error: errTrans } = await supabase.from('transacoes').upsert(payloadTrans);
+      if (!errTrans) {
+        const idsImportados = new Set(novasTransacoes.map((t) => t.id));
+        setTransacoes((prev) =>
+          prev.map((t) => (idsImportados.has(t.id) ? { ...t, pendenteSync: false } : t))
+        );
+      }
+
+      if (novasObservacoes.length > 0) {
+        const payloadObs = novasObservacoes.map((o) => ({
+          id: o.id,
+          mes: o.mes,
+          autor: o.autor,
+          titulo: o.titulo,
+          texto: o.texto,
+          valor: o.valor || 0,
+          resolvido: o.resolvido,
+          data_criacao: o.dataCriacao,
+        }));
+        await supabase.from('observacoes_mes').upsert(payloadObs);
+      }
+    }
+
+    // Muda para Julho/2026 para você já ver os dados importados na hora
+    setMesSelecionado('2026-07');
+  };
 
   // --- AÇÕES DE TRANSAÇÃO ---
   const handleSalvarTransacao = async (dados: {
@@ -730,7 +792,9 @@ export default function App() {
           </nav>
         </div>
 
-        <div className="pt-4 border-t border-zinc-800/80 space-y-2">
+        <div className="pt-4 border-t border-zinc-800/80 space-y-2.5">
+          <ImportadorPlanilhaGastos onImportarDados={handleImportarPlanilhaAntiga} />
+
           <button
             onClick={carregarDadosNuvem}
             className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-zinc-300 hover:border-zinc-700 transition cursor-pointer"
@@ -986,7 +1050,7 @@ export default function App() {
                   <div className="text-center py-12 bg-zinc-900/40 border border-zinc-800/60 rounded-2xl">
                     <p className="text-sm text-zinc-400">Nenhum lançamento neste mês.</p>
                     <p className="text-xs text-zinc-500 mt-1">
-                      Use o botão "+" para registrar.
+                      Use o botão "+" para registrar ou importe sua planilha na aba Extrato.
                     </p>
                   </div>
                 ) : (
@@ -1006,40 +1070,42 @@ export default function App() {
             </div>
           )}
 
-          {/* ABA 2: EXTRATO */}
+          {/* ABA 2: EXTRATO (COM BOTÃO DE IMPORTAR PLANILHA ANTIGA) */}
           {abaAtiva === 'extrato' && (
             <div className="space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                   <h2 className="text-lg font-bold">Extrato Compartilhado</h2>
                   <p className="text-xs text-zinc-400">
-                    {transacoesFiltradas.length} registro(s) encontrado(s)
+                    {transacoesFiltradas.length} registro(s) encontrado(s) em {nomeMesAno(mesSelecionado)}
                   </p>
                 </div>
 
-                <div className="flex gap-2 overflow-x-auto pb-1">
-                  {(
-                    [
-                      { id: 'todos', label: 'Todos' },
-                      { id: 'despesa', label: 'Despesas' },
-                      { id: 'receita', label: 'Receitas' },
-                      { id: 'poupanca', label: 'Guardado' },
-                      { id: 'resgate_poupanca', label: 'Retiradas Poupança' },
-                    ] as const
-                  ).map((tipo) => (
-                    <button
-                      key={tipo.id}
-                      onClick={() => setFiltroTipo(tipo.id)}
-                      className={`px-3.5 py-1.5 rounded-full text-xs font-medium transition cursor-pointer shrink-0 ${
-                        filtroTipo === tipo.id
-                          ? 'bg-emerald-500 text-zinc-950 font-semibold'
-                          : 'bg-zinc-900 text-zinc-400 border border-zinc-800 hover:text-zinc-200'
-                      }`}
-                    >
-                      {tipo.label}
-                    </button>
-                  ))}
-                </div>
+                <ImportadorPlanilhaGastos onImportarDados={handleImportarPlanilhaAntiga} />
+              </div>
+
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {(
+                  [
+                    { id: 'todos', label: 'Todos' },
+                    { id: 'despesa', label: 'Despesas' },
+                    { id: 'receita', label: 'Receitas' },
+                    { id: 'poupanca', label: 'Guardado' },
+                    { id: 'resgate_poupanca', label: 'Retiradas Poupança' },
+                  ] as const
+                ).map((tipo) => (
+                  <button
+                    key={tipo.id}
+                    onClick={() => setFiltroTipo(tipo.id)}
+                    className={`px-3.5 py-1.5 rounded-full text-xs font-medium transition cursor-pointer shrink-0 ${
+                      filtroTipo === tipo.id
+                        ? 'bg-emerald-500 text-zinc-950 font-semibold'
+                        : 'bg-zinc-900 text-zinc-400 border border-zinc-800 hover:text-zinc-200'
+                    }`}
+                  >
+                    {tipo.label}
+                  </button>
+                ))}
               </div>
 
               <div className="relative">
@@ -1067,7 +1133,7 @@ export default function App() {
             </div>
           )}
 
-          {/* ABA NOVA: OBSERVAÇÕES DO MÊS */}
+          {/* ABA: OBSERVAÇÕES DO MÊS */}
           {abaAtiva === 'observacoes' && (
             <AbaObservacoes
               mesSelecionado={mesSelecionado}
@@ -1091,7 +1157,7 @@ export default function App() {
             />
           )}
 
-          {/* ABA 3: POUPANÇA & METAS (COM OPÇÃO DE RETIRAR VALOR DA POUPANÇA) */}
+          {/* ABA 3: POUPANÇA & METAS */}
           {abaAtiva === 'metas' && (
             <div className="space-y-6">
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -1131,7 +1197,6 @@ export default function App() {
                     </p>
                   </div>
 
-                  {/* BOTÕES RÁPIDOS DE GUARDAR OU RETIRAR DA POUPANÇA */}
                   <div className="grid grid-cols-2 gap-2.5 pt-1">
                     <button
                       onClick={() => {
@@ -1250,7 +1315,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* HISTÓRICO DE DEPÓSITOS E RETIRADAS DA POUPANÇA */}
                   <div>
                     <h3 className="text-sm md:text-base font-semibold text-zinc-200 mb-3">
                       Histórico da Poupança (Depósitos e Retiradas)
@@ -1364,7 +1428,6 @@ export default function App() {
               <span>Poupança</span>
             </button>
 
-            {/* BOTÃO RÁPIDO DE NOVO LANÇAMENTO MOBILE */}
             <div className="flex items-center justify-center">
               <button
                 onClick={() => {

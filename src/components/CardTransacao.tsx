@@ -3,6 +3,7 @@ import {
   TrendingDown,
   PiggyBank,
   ArrowDownLeft,
+  ArrowLeftRight,
   MapPin,
   Calendar,
   CreditCard,
@@ -23,6 +24,7 @@ export function CardTransacao({ transacao, pessoa1, onEditar, onExcluir }: CardT
   const isReceita = transacao.tipo === 'receita';
   const isPoupanca = transacao.tipo === 'poupanca';
   const isResgate = transacao.tipo === 'resgate_poupanca';
+  const isTransferencia = transacao.tipo === 'transferencia_interna';
 
   const corBadgePessoa =
     transacao.responsavel === pessoa1
@@ -32,7 +34,13 @@ export function CardTransacao({ transacao, pessoa1, onEditar, onExcluir }: CardT
       : 'bg-pink-500/20 text-pink-300 border-pink-500/30';
 
   return (
-    <div className="bg-zinc-900/70 border border-zinc-800/80 hover:border-zinc-700/80 rounded-xl p-3.5 md:p-4 flex items-center justify-between gap-3 transition">
+    <div
+      className={`border rounded-xl p-3.5 md:p-4 flex items-center justify-between gap-3 transition ${
+        isTransferencia
+          ? 'bg-zinc-900/40 border-zinc-800/60 opacity-85'
+          : 'bg-zinc-900/70 border-zinc-800/80 hover:border-zinc-700/80'
+      }`}
+    >
       <div className="flex items-start gap-3 min-w-0">
         <div
           className={`p-2.5 rounded-xl mt-0.5 shrink-0 ${
@@ -42,6 +50,8 @@ export function CardTransacao({ transacao, pessoa1, onEditar, onExcluir }: CardT
               ? 'bg-sky-500/15 text-sky-400'
               : isResgate
               ? 'bg-amber-500/15 text-amber-400'
+              : isTransferencia
+              ? 'bg-zinc-800 text-zinc-300'
               : 'bg-rose-500/15 text-rose-400'
           }`}
         >
@@ -51,6 +61,8 @@ export function CardTransacao({ transacao, pessoa1, onEditar, onExcluir }: CardT
             <PiggyBank size={18} />
           ) : isResgate ? (
             <ArrowDownLeft size={18} />
+          ) : isTransferencia ? (
+            <ArrowLeftRight size={18} />
           ) : (
             <TrendingDown size={18} />
           )}
@@ -71,14 +83,14 @@ export function CardTransacao({ transacao, pessoa1, onEditar, onExcluir }: CardT
                 Retirada Poupança
               </span>
             )}
+            {isTransferencia && (
+              <span className="text-[10px] bg-zinc-800 text-zinc-300 border border-zinc-700 px-1.5 py-0.5 rounded font-semibold">
+                Movimentação (Neutro)
+              </span>
+            )}
             {transacao.parcelaInfo && (
               <span className="text-[10px] bg-zinc-800 text-zinc-300 px-1.5 py-0.5 rounded font-semibold">
                 {transacao.parcelaInfo}
-              </span>
-            )}
-            {transacao.pendenteSync && (
-              <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded font-semibold">
-                Sincronizando...
               </span>
             )}
           </div>
@@ -119,10 +131,13 @@ export function CardTransacao({ transacao, pessoa1, onEditar, onExcluir }: CardT
               ? 'text-sky-400'
               : isResgate
               ? 'text-amber-400'
+              : isTransferencia
+              ? 'text-zinc-300'
               : 'text-rose-400'
           }`}
         >
-          {isReceita || isPoupanca ? '+' : '-'} {formatarMoeda(transacao.valor)}
+          {isTransferencia ? '⇄ ' : isReceita || isPoupanca ? '+ ' : '- '}
+          {formatarMoeda(transacao.valor)}
         </span>
 
         <div className="flex items-center gap-1 mt-1">

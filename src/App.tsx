@@ -44,6 +44,7 @@ import { ModalConfigCasal } from './components/ModalConfigCasal';
 import { AbaEnxoval } from './components/AbaEnxoval';
 import { AbaObservacoes } from './components/AbaObservacoes';
 import { ImportadorPlanilhaGastos } from './components/ImportadorPlanilhaGastos';
+import { ImportadorExtratoBancario } from './components/ImportadorExtratoBancario';
 import { TelaLogin } from './components/TelaLogin';
 
 export default function App() {
@@ -122,7 +123,6 @@ export default function App() {
     setSincronizando(true);
 
     try {
-      // Filtra no banco de acordo com o usuário logado
       const filtroConta =
         contaAtiva === 'casal'
           ? 'conta_id.eq.casal,conta_id.is.null'
@@ -161,7 +161,6 @@ export default function App() {
         setTransacoes(daNuvem);
       }
 
-      // Carrega Enxoval da Conta
       const { data: enxovalData } = await supabase
         .from('enxoval')
         .select('*')
@@ -184,7 +183,6 @@ export default function App() {
         );
       }
 
-      // Carrega Observações da Conta
       const { data: obsData } = await supabase
         .from('observacoes_mes')
         .select('*')
@@ -207,7 +205,6 @@ export default function App() {
         );
       }
 
-      // Carrega Configurações e Metas de Gastos da Conta (id 1 = Casal, id 2 = Vitória)
       const { data: configData } = await supabase
         .from('config_casal')
         .select('*')
@@ -254,7 +251,6 @@ export default function App() {
     };
   }, [contaAtiva]);
 
-  // Salva no LocalStorage separado por conta
   useEffect(() => {
     if (!contaAtiva) return;
     localStorage.setItem(`${prefixoStorage}:transacoes`, JSON.stringify(transacoes));
@@ -289,7 +285,7 @@ export default function App() {
     );
   };
 
-  // --- CÁLCULOS FINANCEIROS ---
+  // --- CÁLCULOS FINANCEIROS (IGNORA MOVIMENTAÇÕES INTERNAS NO SALDO) ---
   const transacoesDoMes = useMemo(() => {
     return transacoes
       .filter((t) => t.data.startsWith(mesSelecionado))
@@ -308,6 +304,7 @@ export default function App() {
       if (t.tipo === 'despesa') despesas += t.valor;
       if (t.tipo === 'poupanca') poupadoMes += t.valor;
       if (t.tipo === 'resgate_poupanca') resgatadoMes += t.valor;
+      // Nota: 'transferencia_interna' não soma nem subtrai do saldo!
     });
 
     return {
@@ -396,7 +393,7 @@ export default function App() {
     }
   };
 
-  // --- IMPORTAÇÃO DA PLANILHA ANTIGA ---
+  // --- IMPORTAÇÃO DA PLANILHA ANTIGA (JAN A JUL) ---
   const handleImportarPlanilhaAntiga = async (
     novasTransacoes: Transaction[],
     novasObservacoes: ObservacaoMes[]
@@ -449,6 +446,37 @@ export default function App() {
     }
 
     setMesSelecionado('2026-07');
+  };
+
+  // --- IMPORTAÇÃO DE EXTRATOS BANCÁRIOS (.CSV, .OFX, .TXT) ---
+  const handleImportarExtratoBancario = async (novosLancamentos: Transaction[]) => {
+    const comConta = novosLancamentos.map((t) => ({
+      ...t,
+      id: `${contaAtiva}-${t.id}`,
+    }));
+
+    setTransacoes((prev) => [...comConta, ...prev]);
+
+    if (comConta.length > 0) {
+      setMesSelecionado(comConta[0].data.slice(0, 7));
+    }
+
+    if (supabase) {
+      const payload = comConta.map((t) => ({
+        id: t.id,
+        tipo: t.tipo,
+        valor: t.valor,
+        data: t.data,
+        local: t.local,
+        categoria: t.categoria,
+        tags: t.tags,
+        metodo_pagamento: t.metodoPagamento,
+        parcela_info: t.parcelaInfo || null,
+        responsavel: t.responsavel,
+        conta_id: contaAtiva,
+      }));
+      await supabase.from('transacoes').upsert(payload);
+    }
   };
 
   // --- AÇÕES DE TRANSAÇÃO ---
@@ -671,7 +699,7 @@ export default function App() {
     }
   };
 
-const salvarConfigCasal = async (
+  const salvarConfigCasal = async (
     novaMeta?: number,
     nP1?: string,
     nP2?: string,
@@ -1092,7 +1120,7 @@ const salvarConfigCasal = async (
                   <div className="text-center py-12 bg-zinc-900/40 border border-zinc-800/60 rounded-2xl">
                     <p className="text-sm text-zinc-400">Nenhum lançamento neste mês.</p>
                     <p className="text-xs text-zinc-500 mt-1">
-                      Use o botão "+" para registrar.
+                      Use o botão "+" para registrar ou importe extratos na aba Extrato.
                     </p>
                   </div>
                 ) : (
@@ -1112,7 +1140,7 @@ const salvarConfigCasal = async (
             </div>
           )}
 
-          {/* ABA 2: EXTRATO */}
+          {/* ABA 2: EXTRATO (COM IMPORTADOR DE EXTRATOS BANCÁRIOS + PLANILHA ANTIGA) */}
           {abaAtiva === 'extrato' && (
             <div className="space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1123,9 +1151,18 @@ const salvarConfigCasal = async (
                   </p>
                 </div>
 
-                {contaAtiva === 'casal' && (
-                  <ImportadorPlanilhaGastos onImportarDados={handleImportarPlanilhaAntiga} />
-                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <ImportadorExtratoBancario
+                    mesSelecionado={mesSelecionado}
+                    pessoa1={pessoa1}
+                    pessoa2={pessoa2}
+                    onImportarLancamentos={handleImportarExtratoBancario}
+                  />
+
+                  {contaAtiva === 'casal' && (
+                    <ImportadorPlanilhaGastos onImportarDados={handleImportarPlanilhaAntiga} />
+                  )}
+                </div>
               </div>
 
               <div className="flex gap-2 overflow-x-auto pb-1">
@@ -1134,6 +1171,7 @@ const salvarConfigCasal = async (
                     { id: 'todos', label: 'Todos' },
                     { id: 'despesa', label: 'Despesas' },
                     { id: 'receita', label: 'Receitas' },
+                    { id: 'transferencia_interna', label: 'Movimentações (⇄)' },
                     { id: 'poupanca', label: 'Guardado' },
                     { id: 'resgate_poupanca', label: 'Retiradas Poupança' },
                   ] as const
@@ -1317,7 +1355,7 @@ const salvarConfigCasal = async (
                   </div>
                 </div>
 
-                {/* TETO DE GASTOS MENSAL (COM BOTÃO DE EDITAR METAS!) */}
+                {/* TETO DE GASTOS MENSAL */}
                 <div className="lg:col-span-7 space-y-6">
                   <div>
                     <div className="flex items-center justify-between mb-3">

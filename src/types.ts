@@ -1,5 +1,10 @@
 export type AccountId = 'casal' | 'vitoria';
-export type TransactionType = 'despesa' | 'receita' | 'poupanca' | 'resgate_poupanca';
+export type TransactionType =
+  | 'despesa'
+  | 'receita'
+  | 'poupanca'
+  | 'resgate_poupanca'
+  | 'transferencia_interna';
 export type PaymentMethod = 'Pix/Débito' | 'Cartão de Crédito' | 'Dinheiro';
 export type ActiveTab = 'home' | 'extrato' | 'metas' | 'enxoval' | 'observacoes' | 'graficos';
 export type PrioridadeItem = 'Alta' | 'Média' | 'Baixa';
@@ -65,7 +70,13 @@ export const CATEGORIAS_DESPESA = [
   'Outros',
 ];
 
-export const CATEGORIAS_RECEITA = ['Salário', 'Freelance', 'Rendimentos', 'Reembolso/Pix', 'Outros'];
+export const CATEGORIAS_RECEITA = [
+  'Salário',
+  'Freelance',
+  'Rendimentos',
+  'Reembolso/Pix',
+  'Outros',
+];
 
 export const CATEGORIAS_POUPANCA = [
   'Reserva do Casal',
@@ -80,6 +91,12 @@ export const CATEGORIAS_RESGATE = [
   'Pagamento de Conta',
   'Uso Pessoal',
   'Outros',
+];
+
+export const CATEGORIAS_TRANSFERENCIA = [
+  'Transferência entre Contas',
+  'Movimentação Interna',
+  'Pagamento de Fatura Própria',
 ];
 
 export const ORCAMENTOS_INICIAIS: CategoryBudget[] = [

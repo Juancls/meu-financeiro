@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+
 import { X, Users, User } from 'lucide-react';
 import {
   type Transaction,
@@ -10,6 +11,7 @@ import {
   CATEGORIAS_RESGATE,
   obterDataHojeLocal,
 } from '../types';
+
 
 interface ModalTransacaoProps {
   aberto: boolean;

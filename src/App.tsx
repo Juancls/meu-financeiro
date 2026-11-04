@@ -24,7 +24,7 @@ import {
   LogOut,
   CheckSquare,
   Trash2,
-  CreditCard,
+  Repeat,
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
 import {
@@ -45,12 +45,15 @@ import {
   obterMesAtualLocal,
   formatarMoeda,
   nomeMesAno,
+  normalizarTextoBusca,
 } from './types';
 import { CardTransacao } from './components/CardTransacao';
 import { ModalTransacao } from './components/ModalTransacao';
 import { ModalConfigCasal } from './components/ModalConfigCasal';
 import { AbaEnxoval } from './components/AbaEnxoval';
 import { AbaObservacoes } from './components/AbaObservacoes';
+import { AbaAnalise } from './components/AbaAnalise';
+import { ExportadorRelatorio } from './components/ExportadorRelatorio';
 import { ImportadorExtratoBancario } from './components/ImportadorExtratoBancario';
 import { TelaLogin } from './components/TelaLogin';
 
@@ -384,6 +387,66 @@ export default function App() {
       historicoMovimentacoes,
     };
   }, [transacoes, filtroPessoaGlobal]);
+
+  // --- BÔNUS: DETECTOR DE CONTAS FIXAS DO MÊS PASSADO AINDA NÃO LANÇADAS ---
+  const contasFixasMesAnteriorPendentes = useMemo(() => {
+    const [ano, mes] = mesSelecionado.split('-').map(Number);
+    const dAnt = new Date(ano, mes - 2, 1);
+    const mesAntStr = `${dAnt.getFullYear()}-${String(dAnt.getMonth() + 1).padStart(2, '0')}`;
+
+    const fixasAnterior = transacoes.filter(
+      (t) =>
+        t.data.startsWith(mesAntStr) &&
+        t.tipo === 'despesa' &&
+        t.categoria === 'Contas Fixas' &&
+        !t.parcelaInfo
+    );
+
+    const nomesJaNoMesAtual = new Set(
+      transacoes
+        .filter((t) => t.data.startsWith(mesSelecionado) && t.tipo === 'despesa')
+        .map((t) => normalizarTextoBusca(t.local))
+    );
+
+    return fixasAnterior.filter((t) => !nomesJaNoMesAtual.has(normalizarTextoBusca(t.local)));
+  }, [transacoes, mesSelecionado]);
+
+  const handleRepetirContasFixas = async () => {
+    if (contasFixasMesAnteriorPendentes.length === 0) return;
+
+    const [ano, mes] = mesSelecionado.split('-').map(Number);
+    const ultimoDiaMes = new Date(ano, mes, 0).getDate();
+
+    const novas: Transaction[] = contasFixasMesAnteriorPendentes.map((t, idx) => {
+      const diaOrig = Math.min(ultimoDiaMes, parseInt(t.data.slice(8, 10), 10) || 5);
+      const novaData = `${mesSelecionado}-${String(diaOrig).padStart(2, '0')}`;
+      return {
+        ...t,
+        id: `${contaAtiva}-fixa-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+        data: novaData,
+        pendenteSync: false,
+      };
+    });
+
+    setTransacoes((prev) => [...novas, ...prev]);
+
+    if (supabase) {
+      const payload = novas.map((t) => ({
+        id: t.id,
+        tipo: t.tipo,
+        valor: t.valor,
+        data: t.data,
+        local: t.local,
+        categoria: t.categoria,
+        tags: t.tags,
+        metodo_pagamento: t.metodoPagamento,
+        parcela_info: null,
+        responsavel: t.responsavel,
+        conta_id: contaAtiva,
+      }));
+      await supabase.from('transacoes').upsert(payload);
+    }
+  };
 
   // --- SALVAR METAS DE GASTOS DO MÊS (ORÇAMENTOS) ---
   const abrirEdicaoOrcamentos = () => {
@@ -780,35 +843,6 @@ export default function App() {
     return { entradas, gastos, poupanca, saldo: entradas - gastos - poupanca };
   }, [transacoesFiltradas]);
 
-  const gastosPorCategoria = useMemo(() => {
-    const mapa: Record<string, number> = {};
-    transacoesDoMes
-      .filter((t) => t.tipo === 'despesa')
-      .forEach((t) => {
-        mapa[t.categoria] = (mapa[t.categoria] || 0) + t.valor;
-      });
-    return Object.entries(mapa)
-      .map(([categoria, total]) => ({ categoria, total }))
-      .sort((a, b) => b.total - a.total);
-  }, [transacoesDoMes]);
-
-  const gastosPorMetodo = useMemo(() => {
-    const mapa: Record<PaymentMethod, number> = {
-      'Cartão de Crédito': 0,
-      'Pix/Débito': 0,
-      Dinheiro: 0,
-    };
-    transacoesDoMes
-      .filter((t) => t.tipo === 'despesa')
-      .forEach((t) => {
-        mapa[t.metodoPagamento] = (mapa[t.metodoPagamento] || 0) + t.valor;
-      });
-    return Object.entries(mapa)
-      .map(([metodo, total]) => ({ metodo: metodo as PaymentMethod, total }))
-      .filter((m) => m.total > 0)
-      .sort((a, b) => b.total - a.total);
-  }, [transacoesDoMes]);
-
   // SE NÃO ESTIVER LOGADO, EXIBE A TELA DE VERIFICAÇÃO DE USUÁRIO
   if (!contaAtiva) {
     return <TelaLogin onEntrar={(conta) => setContaAtiva(conta)} />;
@@ -1162,6 +1196,27 @@ export default function App() {
                 </div>
               </div>
 
+              {/* BANNER BÔNUS: REPETIR CONTAS FIXAS DO MÊS ANTERIOR */}
+              {contasFixasMesAnteriorPendentes.length > 0 && (
+                <div className="bg-indigo-950/30 border border-indigo-500/30 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs md:text-sm font-bold text-indigo-300 flex items-center gap-2">
+                      <Repeat size={16} className="text-indigo-400 shrink-0" />
+                      Encontramos {contasFixasMesAnteriorPendentes.length} Conta(s) Fixa(s) do mês passado ainda não lançada(s) em {nomeMesAno(mesSelecionado)}
+                    </p>
+                    <p className="text-[11px] text-zinc-400 mt-0.5 truncate max-w-2xl">
+                      {contasFixasMesAnteriorPendentes.map((c) => c.local).join(', ')}
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleRepetirContasFixas}
+                    className="bg-indigo-500 hover:bg-indigo-400 text-zinc-950 font-bold px-3.5 py-2 rounded-xl text-xs shrink-0 transition cursor-pointer"
+                  >
+                    Repetir Contas Fixas ({contasFixasMesAnteriorPendentes.length})
+                  </button>
+                </div>
+              )}
+
               <div>
                 <div className="flex items-center justify-between mb-3">
                   <h2 className="text-sm md:text-base font-semibold text-zinc-200">
@@ -1202,7 +1257,7 @@ export default function App() {
           {/* ABA 2: EXTRATO */}
           {abaAtiva === 'extrato' && (
             <div className="space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                 <div>
                   <h2 className="text-lg font-bold">Extrato Compartilhado</h2>
                   <p className="text-xs text-zinc-400">
@@ -1212,6 +1267,16 @@ export default function App() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
+                  <ExportadorRelatorio
+                    mesSelecionado={mesSelecionado}
+                    pessoa1={pessoa1}
+                    pessoa2={pessoa2}
+                    filtroPessoaGlobal={filtroPessoaGlobal}
+                    transacoesMes={transacoesFiltradas}
+                    orcamentos={orcamentos}
+                    observacoesMes={observacoesMes}
+                  />
+
                   <button
                     onClick={() => {
                       setModoSelecao(!modoSelecao);
@@ -1702,129 +1767,18 @@ export default function App() {
             </div>
           )}
 
-          {/* ABA 4: ANÁLISE COMPLETA */}
+          {/* ABA 4: PAINEL ANALÍTICO COMPLETO (GRÁFICOS + PREVISÃO + EXPORTAÇÃO) */}
           {abaAtiva === 'graficos' && (
-            <div className="space-y-6">
-              <div>
-                <h2 className="text-lg font-bold">Análise de {nomeMesAno(mesSelecionado)}</h2>
-                <p className="text-xs text-zinc-400">
-                  Visão consolidada por categoria, método de pagamento e divisão entre responsáveis
-                </p>
-              </div>
-
-              {resumoMes.despesas === 0 ? (
-                <div className="text-center py-12 bg-zinc-900/40 border border-zinc-800/60 rounded-2xl">
-                  <p className="text-sm text-zinc-400">Sem despesas registradas neste mês.</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-                  {/* COLUNA ESQUERDA: CATEGORIAS */}
-                  <div className="lg:col-span-7 bg-zinc-900/70 border border-zinc-800 rounded-2xl p-5 space-y-4">
-                    <h3 className="text-sm font-bold text-white uppercase tracking-wider">
-                      Gastos por Categoria
-                    </h3>
-                    {gastosPorCategoria.map((item) => {
-                      const pctTotal = Math.round((item.total / resumoMes.despesas) * 100) || 0;
-                      const orc = orcamentos.find((o) => o.categoria === item.categoria);
-                      const estourou = orc && orc.limite > 0 && item.total > orc.limite;
-
-                      return (
-                        <div key={item.categoria} className="space-y-1.5">
-                          <div className="flex justify-between text-xs md:text-sm">
-                            <span className="font-medium text-zinc-200 flex items-center gap-2">
-                              {item.categoria}
-                              {estourou && (
-                                <span className="text-[10px] bg-rose-500/20 text-rose-300 px-1.5 py-0.5 rounded font-semibold">
-                                  Acima da meta
-                                </span>
-                              )}
-                            </span>
-                            <span className="text-zinc-400">
-                              <strong className="text-zinc-100">{formatarMoeda(item.total)}</strong>{' '}
-                              ({pctTotal}%)
-                            </span>
-                          </div>
-                          <div className="w-full h-2.5 bg-zinc-950 rounded-full overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${
-                                estourou ? 'bg-rose-500' : 'bg-emerald-400'
-                              }`}
-                              style={{ width: `${pctTotal}%` }}
-                            />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {/* COLUNA DIREITA: MÉTODO DE PAGAMENTO + POR PESSOA */}
-                  <div className="lg:col-span-5 space-y-5">
-                    <div className="bg-zinc-900/70 border border-zinc-800 rounded-2xl p-5 space-y-4">
-                      <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
-                        <CreditCard size={16} className="text-emerald-400" />
-                        Por Método de Pagamento
-                      </h3>
-                      {gastosPorMetodo.map((m) => {
-                        const pct = Math.round((m.total / resumoMes.despesas) * 100) || 0;
-                        return (
-                          <div key={m.metodo} className="space-y-1.5">
-                            <div className="flex justify-between text-xs">
-                              <span className="font-semibold text-zinc-200">{m.metodo}</span>
-                              <span className="text-zinc-400">
-                                <strong className="text-white">{formatarMoeda(m.total)}</strong> ({pct}%)
-                              </span>
-                            </div>
-                            <div className="w-full h-2 bg-zinc-950 rounded-full overflow-hidden">
-                              <div
-                                className={`h-full rounded-full ${
-                                  m.metodo === 'Cartão de Crédito' ? 'bg-amber-400' : 'bg-sky-400'
-                                }`}
-                                style={{ width: `${pct}%` }}
-                              />
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    <div className="bg-zinc-900/70 border border-zinc-800 rounded-2xl p-5 space-y-4">
-                      <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
-                        <Users size={16} className="text-emerald-400" />
-                        Participação nos Gastos do Mês
-                      </h3>
-                      {[
-                        { nome: pessoa1, valor: resumoPorPessoa.p1Gastos, cor: 'bg-indigo-400' },
-                        { nome: pessoa2, valor: resumoPorPessoa.p2Gastos, cor: 'bg-pink-400' },
-                        { nome: 'Casal', valor: resumoPorPessoa.casalGastos, cor: 'bg-amber-400' },
-                      ].map((p) => {
-                        const totalGeralMes =
-                          resumoPorPessoa.p1Gastos +
-                          resumoPorPessoa.p2Gastos +
-                          resumoPorPessoa.casalGastos;
-                        const pct =
-                          totalGeralMes > 0 ? Math.round((p.valor / totalGeralMes) * 100) : 0;
-                        return (
-                          <div key={p.nome} className="space-y-1.5">
-                            <div className="flex justify-between text-xs">
-                              <span className="font-semibold text-zinc-200">{p.nome}</span>
-                              <span className="text-zinc-400">
-                                <strong className="text-white">{formatarMoeda(p.valor)}</strong> ({pct}%)
-                              </span>
-                            </div>
-                            <div className="w-full h-2 bg-zinc-950 rounded-full overflow-hidden">
-                              <div
-                                className={`h-full rounded-full ${p.cor}`}
-                                style={{ width: `${pct}%` }}
-                              />
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
+            <AbaAnalise
+              mesSelecionado={mesSelecionado}
+              pessoa1={pessoa1}
+              pessoa2={pessoa2}
+              filtroPessoaGlobal={filtroPessoaGlobal}
+              todasTransacoes={transacoes}
+              transacoesDoMes={transacoesDoMes}
+              orcamentos={orcamentos}
+              observacoesMes={observacoesMes}
+            />
           )}
         </main>
 

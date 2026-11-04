@@ -1,9 +1,7 @@
-import React, { useState, useMemo } from 'react';
-import * as XLSX from 'xlsx';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Package,
   Plus,
-  Upload,
   Search,
   CheckCircle2,
   Circle,
@@ -12,7 +10,6 @@ import {
   Home as HomeIcon,
   AlertCircle,
   X,
-  Sparkles,
 } from 'lucide-react';
 import {
   type EnxovalItem,
@@ -24,7 +21,6 @@ import {
 interface AbaEnxovalProps {
   itens: EnxovalItem[];
   onSalvarItem: (item: EnxovalItem) => Promise<void>;
-  onImportarEmLote: (novosItens: EnxovalItem[]) => Promise<void>;
   onAlternarComprado: (item: EnxovalItem) => Promise<void>;
   onExcluirItem: (id: string) => Promise<void>;
 }
@@ -32,13 +28,13 @@ interface AbaEnxovalProps {
 export function AbaEnxoval({
   itens,
   onSalvarItem,
-  onImportarEmLote,
   onAlternarComprado,
   onExcluirItem,
 }: AbaEnxovalProps) {
   const [comodoFiltro, setComodoFiltro] = useState<string>('Todos');
   const [statusFiltro, setStatusFiltro] = useState<'todos' | 'comprados' | 'pendentes'>('todos');
   const [busca, setBusca] = useState('');
+  const [idConfirmandoExclusao, setIdConfirmandoExclusao] = useState<string | null>(null);
 
   // Modal de Criar / Editar Item
   const [modalItemAberto, setModalItemAberto] = useState(false);
@@ -52,10 +48,13 @@ export function AbaEnxoval({
   const [obsForm, setObsForm] = useState('');
   const [compradoForm, setCompradoForm] = useState(false);
 
-  const [importando, setImportando] = useState(false);
-  const [msgImportacao, setMsgImportacao] = useState<string | null>(null);
+  useEffect(() => {
+    if (!idConfirmandoExclusao) return;
+    const timer = setTimeout(() => setIdConfirmandoExclusao(null), 3000);
+    return () => clearTimeout(timer);
+  }, [idConfirmandoExclusao]);
 
-  // Lista dinâmica de cômodos (une os padrões com qualquer cômodo novo vindo da planilha)
+  // Lista dinâmica de cômodos
   const listaComodos = useMemo(() => {
     const conjunto = new Set<string>(COMODOS_PADRAO);
     itens.forEach((i) => {
@@ -131,201 +130,6 @@ export function AbaEnxoval({
     setModalItemAberto(false);
   };
 
-  // ============================================================================
-  // ALGORITMO INTELIGENTE DE LEITURA DE PLANILHA (.XLSX, .XLS, .CSV)
-  // ============================================================================
-  const normalizarTexto = (txt: any) =>
-    String(txt ?? '')
-      .trim()
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '');
-
-  const extrairNumero = (val: any): number => {
-    if (typeof val === 'number') return val;
-    const str = String(val ?? '')
-      .replace(/R\$/gi, '')
-      .replace(/\s/g, '')
-      .trim();
-    if (!str) return 0;
-    const limpo = str.includes(',') ? str.replace(/\./g, '').replace(',', '.') : str;
-    const num = parseFloat(limpo);
-    return isNaN(num) ? 0 : num;
-  };
-
-  const interpretarPrioridade = (val: any): PrioridadeItem => {
-    const t = normalizarTexto(val);
-    if (t.includes('alt') || t.includes('urgent') || t === '1' || t.includes('essencial')) {
-      return 'Alta';
-    }
-    if (t.includes('baix') || t === '3' || t.includes('depois')) {
-      return 'Baixa';
-    }
-    return 'Média';
-  };
-
-  const interpretarComprado = (val: any): boolean => {
-    if (typeof val === 'boolean') return val;
-    const t = normalizarTexto(val);
-    return (
-      t === 'sim' ||
-      t === 's' ||
-      t === 'ok' ||
-      t === 'x' ||
-      t === 'comprado' ||
-      t === 'ja temos' ||
-      t === 'tenho' ||
-      t === 'true' ||
-      t === '1' ||
-      t === 'feito' ||
-      t.includes('comprad')
-    );
-  };
-
-  const handleUploadPlanilha = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setImportando(true);
-    setMsgImportacao(null);
-
-    try {
-      const buffer = await file.arrayBuffer();
-      const workbook = XLSX.read(buffer, { type: 'array' });
-      const itensExtraidos: EnxovalItem[] = [];
-
-      workbook.SheetNames.forEach((sheetName) => {
-        const sheet = workbook.Sheets[sheetName];
-        const linhas: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-
-        // Define o cômodo inicial pelo nome da aba (se não for genérico como "Planilha1" ou "Página1")
-        let comodoAtual =
-          /^(planilha|sheet|pagina|aba)\s*\d*$/i.test(sheetName.trim())
-            ? 'Cozinha'
-            : sheetName.trim();
-
-        // Índices das colunas detectadas
-        let colItem = -1;
-        let colQtd = -1;
-        let colValor = -1;
-        let colPrio = -1;
-        let colObs = -1;
-        let colComprado = -1;
-        let colComodo = -1;
-
-        for (let r = 0; r < linhas.length; r++) {
-          const linha = linhas[r];
-          const celulasPreenchidas = linha.filter((c) => String(c).trim() !== '');
-          if (celulasPreenchidas.length === 0) continue;
-
-          const textosNorm = linha.map(normalizarTexto);
-
-          // 1. Verifica se esta linha é um cabeçalho de tabela (contém "item"/"produto" e "qtd"/"valor"/"comprado")
-          const idxItem = textosNorm.findIndex(
-            (t) => t === 'item' || t === 'itens' || t === 'produto' || t === 'nome' || t === 'descricao'
-          );
-          const temOutrasColunas = textosNorm.some(
-            (t) =>
-              t.includes('quant') ||
-              t.includes('qtd') ||
-              t.includes('valor') ||
-              t.includes('preco') ||
-              t.includes('prioridade') ||
-              t.includes('comprado') ||
-              t.includes('status')
-          );
-
-          if (idxItem !== -1 && temOutrasColunas) {
-            colItem = idxItem;
-            colQtd = textosNorm.findIndex((t) => t.includes('quant') || t.includes('qtd') || t === 'un');
-            colValor = textosNorm.findIndex(
-              (t) => t.includes('valor') || t.includes('preco') || t.includes('custo') || t.includes('total')
-            );
-            colPrio = textosNorm.findIndex((t) => t.includes('prioridade') || t.includes('urgencia'));
-            colObs = textosNorm.findIndex((t) => t.includes('obs') || t.includes('nota') || t.includes('detalhe'));
-            colComprado = textosNorm.findIndex(
-              (t) => t.includes('comprado') || t.includes('status') || t.includes('ja tem') || t.includes('ok')
-            );
-            colComodo = textosNorm.findIndex((t) => t.includes('comodo') || t.includes('ambiente'));
-
-            // Olha a linha imediatamente acima para ver se tinha o título do Cômodo (Ex: "COZINHA")
-            if (r > 0) {
-              const linhaAnterior = linhas[r - 1].filter((c) => String(c).trim() !== '');
-              if (linhaAnterior.length === 1) {
-                const possivelComodo = String(linhaAnterior[0]).trim();
-                if (possivelComodo.length > 2 && possivelComodo.length < 35) {
-                  comodoAtual = possivelComodo;
-                }
-              }
-            }
-            continue;
-          }
-
-          // 2. Se a linha tem apenas 1 célula preenchida, pode ser um divisor de cômodo (ex: "SALA", "QUARTO")
-          if (celulasPreenchidas.length === 1) {
-            const textoUnico = String(celulasPreenchidas[0]).trim();
-            if (
-              textoUnico.length >= 3 &&
-              textoUnico.length <= 30 &&
-              !/total|subtotal|resumo/i.test(textoUnico)
-            ) {
-              comodoAtual =
-                textoUnico.charAt(0).toUpperCase() + textoUnico.slice(1).toLowerCase();
-            }
-            continue;
-          }
-
-          // 3. Se já encontramos um cabeçalho válido, lemos a linha como um item do enxoval!
-          if (colItem !== -1) {
-            const nomeDoItem = String(linha[colItem] ?? '').trim();
-            if (
-              !nomeDoItem ||
-              /^(total|subtotal|soma|item|produto)$/i.test(nomeDoItem)
-            ) {
-              continue;
-            }
-
-            const qtd = colQtd !== -1 ? Math.max(1, Math.round(extrairNumero(linha[colQtd]) || 1)) : 1;
-            const valor = colValor !== -1 ? extrairNumero(linha[colValor]) : 0;
-            const prioridade = colPrio !== -1 ? interpretarPrioridade(linha[colPrio]) : 'Média';
-            const observacao = colObs !== -1 ? String(linha[colObs] ?? '').trim() : '';
-            const comprado = colComprado !== -1 ? interpretarComprado(linha[colComprado]) : false;
-            const comodoLinha =
-              colComodo !== -1 && String(linha[colComodo]).trim()
-                ? String(linha[colComodo]).trim()
-                : comodoAtual;
-
-            itensExtraidos.push({
-              id: `${Date.now()}-${itensExtraidos.length}-${Math.random().toString(36).slice(2, 6)}`,
-              comodo: comodoLinha,
-              item: nomeDoItem,
-              quantidade: qtd,
-              valor,
-              prioridade,
-              observacao,
-              comprado,
-            });
-          }
-        }
-      });
-
-      if (itensExtraidos.length === 0) {
-        alert(
-          'Não encontramos itens com as colunas esperadas (Item, Quantidade, Valor, Prioridade, Observação, Comprado). Verifique se a primeira linha da tabela tem esses títulos!'
-        );
-      } else {
-        await onImportarEmLote(itensExtraidos);
-        setMsgImportacao(`🎉 ${itensExtraidos.length} itens importados da planilha com sucesso!`);
-      }
-    } catch (err) {
-      console.error(err);
-      alert('Erro ao ler o arquivo da planilha. Tente salvar como .xlsx ou .csv.');
-    } finally {
-      setImportando(false);
-      e.target.value = '';
-    }
-  };
-
   // Filtragem dos itens na tela
   const itensFiltrados = useMemo(() => {
     return itens.filter((i) => {
@@ -352,7 +156,7 @@ export function AbaEnxoval({
 
   return (
     <div className="space-y-6">
-      {/* CABEÇALHO E BOTÕES DE AÇÃO (NOVO ITEM + IMPORTAR PLANILHA) */}
+      {/* CABEÇALHO E BOTÃO DE AÇÃO (NOVO ITEM) */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h2 className="text-lg md:text-xl font-bold flex items-center gap-2">
@@ -365,18 +169,6 @@ export function AbaEnxoval({
         </div>
 
         <div className="flex items-center gap-2">
-          <label className="flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-200 px-3.5 py-2.5 rounded-xl text-xs font-semibold cursor-pointer transition">
-            <Upload size={15} className="text-sky-400" />
-            <span>{importando ? 'Lendo planilha...' : 'Importar Planilha'}</span>
-            <input
-              type="file"
-              accept=".xlsx,.xls,.csv"
-              onChange={handleUploadPlanilha}
-              disabled={importando}
-              className="hidden"
-            />
-          </label>
-
           <button
             onClick={abrirModalNovo}
             className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 px-3.5 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer"
@@ -386,17 +178,6 @@ export function AbaEnxoval({
           </button>
         </div>
       </div>
-
-      {msgImportacao && (
-        <div className="bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 px-4 py-3 rounded-xl text-xs flex items-center justify-between">
-          <span className="flex items-center gap-2 font-medium">
-            <Sparkles size={15} /> {msgImportacao}
-          </span>
-          <button onClick={() => setMsgImportacao(null)} className="text-emerald-400">
-            <X size={15} />
-          </button>
-        </div>
-      )}
 
       {/* PAINEL DE PROGRESSO DO ENXOVAL */}
       <div className="bg-gradient-to-br from-zinc-900 via-zinc-900 to-emerald-950/30 border border-zinc-800 rounded-2xl p-5 space-y-4">
@@ -503,7 +284,7 @@ export function AbaEnxoval({
           <Package size={32} className="mx-auto text-zinc-600 mb-2" />
           <p className="text-sm text-zinc-300 font-medium">Nenhum item encontrado neste filtro.</p>
           <p className="text-xs text-zinc-500 mt-1">
-            Clique em "Importar Planilha" no topo para carregar sua tabela do Excel/Sheets ou em "+ Novo Item".
+            Clique em "+ Novo Item" no topo para cadastrar um item no enxoval.
           </p>
         </div>
       ) : (
@@ -587,13 +368,22 @@ export function AbaEnxoval({
                   >
                     <Pencil size={14} />
                   </button>
-                  <button
-                    onClick={() => onExcluirItem(item.id)}
-                    className="text-zinc-500 hover:text-rose-400 p-1.5 rounded-lg hover:bg-zinc-800/60 transition cursor-pointer"
-                    title="Excluir item"
-                  >
-                    <Trash2 size={14} />
-                  </button>
+                  {idConfirmandoExclusao === item.id ? (
+                    <button
+                      onClick={() => onExcluirItem(item.id)}
+                      className="text-[10px] font-bold bg-rose-500 text-white px-2 py-1 rounded-lg hover:bg-rose-400 transition cursor-pointer"
+                    >
+                      Apagar?
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => setIdConfirmandoExclusao(item.id)}
+                      className="text-zinc-500 hover:text-rose-400 p-1.5 rounded-lg hover:bg-zinc-800/60 transition cursor-pointer"
+                      title="Excluir item"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

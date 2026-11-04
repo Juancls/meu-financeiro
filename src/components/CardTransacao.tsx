@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import {
   TrendingUp,
   TrendingDown,
@@ -10,6 +11,8 @@ import {
   Tag,
   Trash2,
   Pencil,
+  CheckSquare,
+  Square,
 } from 'lucide-react';
 import { type Transaction, formatarMoeda, formatarDataBR } from '../types';
 
@@ -18,9 +21,28 @@ interface CardTransacaoProps {
   pessoa1: string;
   onEditar: (transacao: Transaction) => void;
   onExcluir: (id: string) => void;
+  modoSelecao?: boolean;
+  selecionado?: boolean;
+  onAlternarSelecao?: (id: string) => void;
 }
 
-export function CardTransacao({ transacao, pessoa1, onEditar, onExcluir }: CardTransacaoProps) {
+export function CardTransacao({
+  transacao,
+  pessoa1,
+  onEditar,
+  onExcluir,
+  modoSelecao = false,
+  selecionado = false,
+  onAlternarSelecao,
+}: CardTransacaoProps) {
+  const [confirmandoExclusao, setConfirmandoExclusao] = useState(false);
+
+  useEffect(() => {
+    if (!confirmandoExclusao) return;
+    const timer = setTimeout(() => setConfirmandoExclusao(false), 3000);
+    return () => clearTimeout(timer);
+  }, [confirmandoExclusao]);
+
   const isReceita = transacao.tipo === 'receita';
   const isPoupanca = transacao.tipo === 'poupanca';
   const isResgate = transacao.tipo === 'resgate_poupanca';
@@ -35,13 +57,35 @@ export function CardTransacao({ transacao, pessoa1, onEditar, onExcluir }: CardT
 
   return (
     <div
+      onClick={() => {
+        if (modoSelecao && onAlternarSelecao) {
+          onAlternarSelecao(transacao.id);
+        }
+      }}
       className={`border rounded-xl p-3.5 md:p-4 flex items-center justify-between gap-3 transition ${
-        isTransferencia
+        modoSelecao ? 'cursor-pointer' : ''
+      } ${
+        selecionado
+          ? 'bg-emerald-950/25 border-emerald-500/60'
+          : isTransferencia
           ? 'bg-zinc-900/40 border-zinc-800/60 opacity-85'
           : 'bg-zinc-900/70 border-zinc-800/80 hover:border-zinc-700/80'
       }`}
     >
       <div className="flex items-start gap-3 min-w-0">
+        {modoSelecao && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onAlternarSelecao?.(transacao.id);
+            }}
+            className="mt-2 shrink-0 text-emerald-400 cursor-pointer"
+          >
+            {selecionado ? <CheckSquare size={18} /> : <Square size={18} className="text-zinc-500" />}
+          </button>
+        )}
+
         <div
           className={`p-2.5 rounded-xl mt-0.5 shrink-0 ${
             isReceita
@@ -122,7 +166,7 @@ export function CardTransacao({ transacao, pessoa1, onEditar, onExcluir }: CardT
         </div>
       </div>
 
-      <div className="flex flex-col items-end shrink-0">
+      <div className="flex flex-col items-end shrink-0" onClick={(e) => e.stopPropagation()}>
         <span
           className={`font-bold text-sm md:text-base ${
             isReceita
@@ -140,22 +184,34 @@ export function CardTransacao({ transacao, pessoa1, onEditar, onExcluir }: CardT
           {formatarMoeda(transacao.valor)}
         </span>
 
-        <div className="flex items-center gap-1 mt-1">
-          <button
-            onClick={() => onEditar(transacao)}
-            className="text-zinc-500 hover:text-emerald-400 p-1.5 transition rounded-lg hover:bg-zinc-800/60 cursor-pointer"
-            title="Editar lançamento"
-          >
-            <Pencil size={14} />
-          </button>
-          <button
-            onClick={() => onExcluir(transacao.id)}
-            className="text-zinc-500 hover:text-rose-400 p-1.5 transition rounded-lg hover:bg-zinc-800/60 cursor-pointer"
-            title="Excluir lançamento"
-          >
-            <Trash2 size={15} />
-          </button>
-        </div>
+        {!modoSelecao && (
+          <div className="flex items-center gap-1 mt-1">
+            <button
+              onClick={() => onEditar(transacao)}
+              className="text-zinc-500 hover:text-emerald-400 p-1.5 transition rounded-lg hover:bg-zinc-800/60 cursor-pointer"
+              title="Editar lançamento"
+            >
+              <Pencil size={14} />
+            </button>
+            {confirmandoExclusao ? (
+              <button
+                onClick={() => onExcluir(transacao.id)}
+                className="text-[10px] font-bold bg-rose-500 text-white px-2 py-1 rounded-lg hover:bg-rose-400 transition cursor-pointer"
+                title="Confirmar exclusão"
+              >
+                Apagar?
+              </button>
+            ) : (
+              <button
+                onClick={() => setConfirmandoExclusao(true)}
+                className="text-zinc-500 hover:text-rose-400 p-1.5 transition rounded-lg hover:bg-zinc-800/60 cursor-pointer"
+                title="Excluir lançamento"
+              >
+                <Trash2 size={15} />
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

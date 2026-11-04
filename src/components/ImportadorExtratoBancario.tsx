@@ -13,6 +13,7 @@ import {
   AlertCircle,
   Check,
   FileText,
+  CopyCheck,
 } from 'lucide-react';
 import {
   type Transaction,
@@ -22,8 +23,8 @@ import {
   CATEGORIAS_RECEITA,
   CATEGORIAS_POUPANCA,
   CATEGORIAS_TRANSFERENCIA,
-  formatarMoeda,
   nomeMesAno,
+  sugerirCategoriaPorDescricao,
 } from '../types';
 
 // Configura o Worker do PDF.js via CDN para funcionar direto no Vite/Vercel sem erro de build
@@ -33,6 +34,7 @@ interface ImportadorExtratoBancarioProps {
   mesSelecionado: string; // Ex: "2026-09"
   pessoa1: string;
   pessoa2: string;
+  transacoesExistentes?: Transaction[];
   onImportarLancamentos: (novos: Transaction[]) => Promise<void>;
 }
 
@@ -50,6 +52,7 @@ interface ItemPreview {
   metodoPagamento: PaymentMethod;
   origemArquivo: string;
   motivoAuto?: string;
+  duplicado?: boolean;
 }
 
 const MESES_ABREV: Record<string, string> = {
@@ -71,6 +74,7 @@ export function ImportadorExtratoBancario({
   mesSelecionado,
   pessoa1,
   pessoa2,
+  transacoesExistentes = [],
   onImportarLancamentos,
 }: ImportadorExtratoBancarioProps) {
   const [modalAberto, setModalAberto] = useState(false);
@@ -100,6 +104,16 @@ export function ImportadorExtratoBancario({
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .trim();
+
+  const verificarDuplicataExistente = (data: string, valor: number, desc: string): boolean => {
+    const descNorm = normalizar(desc);
+    return transacoesExistentes.some((t) => {
+      if (t.data !== data) return false;
+      if (Math.abs(t.valor - valor) >= 0.01) return false;
+      const tNorm = normalizar(t.local);
+      return tNorm === descNorm || tNorm.includes(descNorm) || descNorm.includes(tNorm);
+    });
+  };
 
   // Classificador automático de categoria e método
   const classificarDescricao = (
@@ -152,112 +166,11 @@ export function ImportadorExtratoBancario({
     }
 
     if (sinal === 'entrada') {
-      if (t.includes('salario') || t.includes('pagamento') || t.includes('remuneracao')) {
-        return { tipo: 'receita', categoria: 'Salário', metodo: 'Pix/Débito' };
-      }
-      if (t.includes('rendimento') || t.includes('dividendo')) {
-        return { tipo: 'receita', categoria: 'Rendimentos', metodo: 'Pix/Débito' };
-      }
-      return { tipo: 'receita', categoria: 'Reembolso/Pix', metodo: 'Pix/Débito' };
+      const catReceita = sugerirCategoriaPorDescricao(desc, 'receita') || 'Reembolso/Pix';
+      return { tipo: 'receita', categoria: catReceita, metodo: 'Pix/Débito' };
     }
 
-    let categoria = 'Outros';
-    if (
-      t.includes('uber') ||
-      t.includes('99') ||
-      t.includes('onibus') ||
-      t.includes('van') ||
-      t.includes('pedagio') ||
-      t.includes('combustivel') ||
-      t.includes('posto') ||
-      t.includes('estacionamento') ||
-      t.includes('zona azul')
-    ) {
-      categoria = 'Transporte';
-    } else if (
-      t.includes('ifood') ||
-      t.includes('mercado') ||
-      t.includes('supermercado') ||
-      t.includes('padaria') ||
-      t.includes('lanche') ||
-      t.includes('restaurante') ||
-      t.includes('burger') ||
-      t.includes('mc donalds') ||
-      t.includes('mcdonalds') ||
-      t.includes('bk') ||
-      t.includes('sushi') ||
-      t.includes('esfiha') ||
-      t.includes('pizza') ||
-      t.includes('acai') ||
-      t.includes('sorvete') ||
-      t.includes('doceria') ||
-      t.includes('cantina') ||
-      t.includes('atacadao') ||
-      t.includes('assai')
-    ) {
-      categoria = 'Comida';
-    } else if (
-      t.includes('faculdade') ||
-      t.includes('claro') ||
-      t.includes('vivo') ||
-      t.includes('tim') ||
-      t.includes('internet') ||
-      t.includes('energia') ||
-      t.includes('elektro') ||
-      t.includes('sabesp') ||
-      t.includes('agua') ||
-      t.includes('aluguel') ||
-      t.includes('condominio') ||
-      t.includes('fatura') ||
-      t.includes('cartao') ||
-      t.includes('boleto')
-    ) {
-      categoria = 'Contas Fixas';
-    } else if (
-      t.includes('farmacia') ||
-      t.includes('drogaria') ||
-      t.includes('droga') ||
-      t.includes('medico') ||
-      t.includes('consulta') ||
-      t.includes('exame') ||
-      t.includes('dentista') ||
-      t.includes('psicolog') ||
-      t.includes('terapia') ||
-      t.includes('otica')
-    ) {
-      categoria = 'Saúde';
-    } else if (
-      t.includes('cinema') ||
-      t.includes('spotify') ||
-      t.includes('netflix') ||
-      t.includes('steam') ||
-      t.includes('playstation') ||
-      t.includes('jogo') ||
-      t.includes('ingresso') ||
-      t.includes('bar') ||
-      t.includes('festa') ||
-      t.includes('futebol')
-    ) {
-      categoria = 'Lazer';
-    } else if (
-      t.includes('shopee') ||
-      t.includes('amazon') ||
-      t.includes('mercado livre') ||
-      t.includes('mercadolivre') ||
-      t.includes('shein') ||
-      t.includes('magalu') ||
-      t.includes('cea') ||
-      t.includes('renner') ||
-      t.includes('riachuelo') ||
-      t.includes('roupa') ||
-      t.includes('presente') ||
-      t.includes('barbeiro') ||
-      t.includes('cabeleireiro') ||
-      t.includes('salao')
-    ) {
-      categoria = 'Compras';
-    }
-
+    const categoria = sugerirCategoriaPorDescricao(desc, 'despesa') || 'Outros';
     const metodo: PaymentMethod =
       t.includes('credito') || t.includes('parc ') ? 'Cartão de Crédito' : metodoPadrao;
 
@@ -384,7 +297,6 @@ export function ImportadorExtratoBancario({
       .trim();
     if (!s) return null;
 
-    // Trata formato do Itaú onde o sinal de menos fica atrás do número (ex: "150,00-" ou "-150,00" ou "150,00D")
     let multiplicador = 1;
     if (s.endsWith('-') || s.startsWith('-') || /d$/i.test(s)) {
       multiplicador = -1;
@@ -416,7 +328,6 @@ export function ImportadorExtratoBancario({
       const page = await pdf.getPage(pageNum);
       const textContent = await page.getTextContent();
 
-      // Agrupa os textos pela coordenada vertical (Y) para reconstruir cada linha da tabela do PDF
       const gruposY: { y: number; itens: { x: number; str: string }[] }[] = [];
 
       for (const item of textContent.items as any[]) {
@@ -425,7 +336,6 @@ export function ImportadorExtratoBancario({
         const x = item.transform[4];
         const y = item.transform[5];
 
-        // Tolerância de 3.5px na vertical para considerar que estão na mesma linha
         let grupo = gruposY.find((g) => Math.abs(g.y - y) <= 3.5);
         if (!grupo) {
           grupo = { y, itens: [] };
@@ -434,11 +344,9 @@ export function ImportadorExtratoBancario({
         grupo.itens.push({ x, str: texto });
       }
 
-      // Ordena de cima para baixo (no PDF, o Y maior fica no topo)
       gruposY.sort((a, b) => b.y - a.y);
 
       for (const g of gruposY) {
-        // Ordena da esquerda para a direita (X crescente)
         g.itens.sort((a, b) => a.x - b.x);
         const linhaMontada = g.itens.map((i) => i.str).join(' ');
         linhasTotais.push(linhaMontada);
@@ -449,7 +357,7 @@ export function ImportadorExtratoBancario({
   };
 
   // ============================================================================
-  // LEITOR DE LINHAS DE TEXTO / PDF (SUPORTA DATA REPETIDA OU AGRUPADA POR DIA DO ITAÚ)
+  // LEITOR DE LINHAS DE TEXTO / PDF
   // ============================================================================
   const lerTextoBrutoOuPDF = (
     texto: string,
@@ -467,7 +375,6 @@ export function ImportadorExtratoBancario({
 
       const normLinha = normalizar(limpa);
 
-      // Ignora linhas que são claramente saldos ou rodapés de PDF do Itaú
       if (
         normLinha.startsWith('saldo') ||
         normLinha.includes('saldo anterior') ||
@@ -480,7 +387,6 @@ export function ImportadorExtratoBancario({
         continue;
       }
 
-      // Verifica se a linha tem uma data explícita (DD/MM/YYYY, DD/MM ou DD/mmm)
       const { dataISO, horario } = extrairDataISO(limpa);
       if (dataISO) {
         ultimaDataDetectada = dataISO;
@@ -489,19 +395,16 @@ export function ImportadorExtratoBancario({
       const dataUsada = dataISO || ultimaDataDetectada;
       if (!dataUsada) continue;
 
-      // Procura todos os valores em formato monetário Brasileiro (ex: -15,90 | 1.250,00 | 45,00-) na linha
       const regexValores =
         /([-+]?\s*(?:R\$\s*)?\d{1,3}(?:\.\d{3})*,\d{2}\s*[-dDcC]?)/gi;
       const matchesValores = Array.from(limpa.matchAll(regexValores));
 
       if (matchesValores.length === 0) continue;
 
-      // Em extratos do Itaú, se houver 2 valores na mesma linha, o 1º é o Valor do Lançamento e o 2º é o Saldo do dia
       const matchValorPrincipal = matchesValores[0][0];
       let valorNum = extrairNumero(matchValorPrincipal);
       if (valorNum === null || valorNum === 0) continue;
 
-      // Remove a data e os valores numéricos para sobrar a descrição do lançamento
       let desc = limpa;
       if (dataISO) {
         desc = desc
@@ -519,13 +422,11 @@ export function ImportadorExtratoBancario({
 
       if (!desc || desc.length < 2) continue;
 
-      // VERIFICADOR DE MÊS EXATO (Filtra apenas o mês desejado!)
       if (!dataUsada.startsWith(mesAlvo)) {
         ignorados++;
         continue;
       }
 
-      // Inteligência extra para PDF do Itaú: se o PDF não colocou sinal de "-" em compras (TAR / PIX ENVIADO / COMPRA / PAGTO / SISPAG)
       const descNorm = normalizar(desc);
       if (
         valorNum > 0 &&
@@ -544,15 +445,17 @@ export function ImportadorExtratoBancario({
       }
 
       const sinal: 'entrada' | 'saida' = valorNum > 0 ? 'entrada' : 'saida';
+      const valorAbs = Math.abs(valorNum);
       const classif = classificarDescricao(desc, sinal);
+      const jaExiste = verificarDuplicataExistente(dataUsada, valorAbs, desc);
 
       validos.push({
         idTemp: `${Date.now()}-${origemLabel}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
-        selecionado: true,
+        selecionado: !jaExiste,
         data: dataUsada,
         horario,
         local: desc,
-        valor: Math.abs(valorNum),
+        valor: valorAbs,
         sinalOriginal: sinal,
         tipo: classif.tipo,
         categoria: classif.categoria,
@@ -560,6 +463,7 @@ export function ImportadorExtratoBancario({
         metodoPagamento: classif.metodo,
         origemArquivo: origemLabel,
         motivoAuto: classif.motivo,
+        duplicado: jaExiste,
       });
     }
 
@@ -603,10 +507,11 @@ export function ImportadorExtratoBancario({
       const sinal: 'entrada' | 'saida' = valorBruto > 0 ? 'entrada' : 'saida';
       const valorAbs = Math.abs(valorBruto);
       const classif = classificarDescricao(desc, sinal);
+      const jaExiste = verificarDuplicataExistente(dataISO, valorAbs, desc);
 
       validos.push({
         idTemp: `${Date.now()}-${nomeArq}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
-        selecionado: true,
+        selecionado: !jaExiste,
         data: dataISO,
         horario,
         local: desc,
@@ -618,6 +523,7 @@ export function ImportadorExtratoBancario({
         metodoPagamento: classif.metodo,
         origemArquivo: nomeArq,
         motivoAuto: classif.motivo,
+        duplicado: jaExiste,
       });
     });
 
@@ -694,10 +600,11 @@ export function ImportadorExtratoBancario({
         const sinal: 'entrada' | 'saida' = valorEncontrado > 0 ? 'entrada' : 'saida';
         const valorAbs = Math.abs(valorEncontrado);
         const classif = classificarDescricao(descFinal, sinal);
+        const jaExiste = verificarDuplicataExistente(dataEncontrada, valorAbs, descFinal);
 
         validos.push({
           idTemp: `${Date.now()}-${nomeArq}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
-          selecionado: true,
+          selecionado: !jaExiste,
           data: dataEncontrada,
           horario: horarioEncontrado,
           local: descFinal,
@@ -709,6 +616,7 @@ export function ImportadorExtratoBancario({
           metodoPagamento: classif.metodo,
           origemArquivo: nomeArq,
           motivoAuto: classif.motivo,
+          duplicado: jaExiste,
         });
       });
     });
@@ -717,14 +625,14 @@ export function ImportadorExtratoBancario({
   };
 
   // ============================================================================
-  // PROCESSAMENTO DE MÚLTIPLOS ARQUIVOS JUNTOS (INCLUINDO .PDF DO ITAÚ!)
+  // PROCESSAMENTO DE MÚLTIPLOS ARQUIVOS JUNTOS
   // ============================================================================
   const handleUploadArquivos = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
     setLendoArquivos(true);
-    let novosExtraidos: ItemPreview[] = [];
+    const novosExtraidos: ItemPreview[] = [];
     let totalForaDoMes = 0;
 
     try {
@@ -787,12 +695,18 @@ export function ImportadorExtratoBancario({
     setItensPreview((prev) => prev.filter((item) => item.idTemp !== idTemp));
   };
 
+  const alternarTodosPreview = () => {
+    const todosMarcados = itensPreview.every((i) => i.selecionado);
+    setItensPreview((prev) => prev.map((i) => ({ ...i, selecionado: !todosMarcados })));
+  };
+
   const resumoPreview = useMemo(() => {
     const selecionados = itensPreview.filter((i) => i.selecionado);
     const qtdDespesas = selecionados.filter((i) => i.tipo === 'despesa').length;
     const qtdReceitas = selecionados.filter((i) => i.tipo === 'receita').length;
     const qtdTransferencias = selecionados.filter((i) => i.tipo === 'transferencia_interna').length;
-    return { total: selecionados.length, qtdDespesas, qtdReceitas, qtdTransferencias };
+    const qtdDuplicados = itensPreview.filter((i) => i.duplicado).length;
+    return { total: selecionados.length, qtdDespesas, qtdReceitas, qtdTransferencias, qtdDuplicados };
   }, [itensPreview]);
 
   const handleConfirmarImportacao = async () => {
@@ -841,7 +755,7 @@ export function ImportadorExtratoBancario({
                   Importador Inteligente de Extratos (PDF, OFX, CSV)
                 </h3>
                 <p className="text-xs text-zinc-400">
-                  Suporta PDF direto do Itaú/Nubank/Inter, filtra o mês exato e detecta transferências entre suas contas
+                  Suporta PDF direto do Itaú/Nubank/Inter, evita duplicatas e detecta transferências entre contas
                 </p>
               </div>
               <button
@@ -979,12 +893,24 @@ export function ImportadorExtratoBancario({
                 )}
               </div>
 
-              {ignoradosOutroMes > 0 && (
-                <div className="bg-sky-500/10 border border-sky-500/30 rounded-xl px-3.5 py-2 text-xs text-sky-300 flex items-center justify-between">
-                  <span className="flex items-center gap-2">
-                    <AlertCircle size={15} className="shrink-0 text-sky-400" />
-                    Verificador de Mês: <strong>{ignoradosOutroMes} lançamento(s)</strong> de outros meses (60/90 dias) foram ignorados automaticamente.
-                  </span>
+              {(ignoradosOutroMes > 0 || resumoPreview.qtdDuplicados > 0) && (
+                <div className="flex flex-col sm:flex-row gap-2">
+                  {ignoradosOutroMes > 0 && (
+                    <div className="flex-1 bg-sky-500/10 border border-sky-500/30 rounded-xl px-3.5 py-2 text-xs text-sky-300 flex items-center gap-2">
+                      <AlertCircle size={15} className="shrink-0 text-sky-400" />
+                      <span>
+                        <strong>{ignoradosOutroMes} lançamento(s)</strong> de outros meses foram ignorados.
+                      </span>
+                    </div>
+                  )}
+                  {resumoPreview.qtdDuplicados > 0 && (
+                    <div className="flex-1 bg-amber-500/10 border border-amber-500/30 rounded-xl px-3.5 py-2 text-xs text-amber-300 flex items-center gap-2">
+                      <CopyCheck size={15} className="shrink-0 text-amber-400" />
+                      <span>
+                        <strong>{resumoPreview.qtdDuplicados} lançamento(s)</strong> já existentes no mês foram desmarcados automaticamente.
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -992,28 +918,37 @@ export function ImportadorExtratoBancario({
               {itensPreview.length > 0 && (
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <h4 className="text-xs md:text-sm font-bold text-white">
-                        Revisão dos Lançamentos ({resumoPreview.total} selecionados)
+                        Revisão dos Lançamentos ({resumoPreview.total} de {itensPreview.length} selecionados)
                       </h4>
                       {resumoPreview.qtdTransferencias > 0 && (
                         <span className="text-[11px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full flex items-center gap-1 font-semibold">
                           <ArrowLeftRight size={12} />
-                          {resumoPreview.qtdTransferencias} movimentação(ões) entre contas detectada(s)
+                          {resumoPreview.qtdTransferencias} movimentação(ões) entre contas
                         </span>
                       )}
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setItensPreview([]);
-                        setIgnoradosOutroMes(0);
-                      }}
-                      className="text-xs text-rose-400 hover:underline cursor-pointer"
-                    >
-                      Limpar lista
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={alternarTodosPreview}
+                        className="text-xs text-emerald-400 hover:underline cursor-pointer font-semibold"
+                      >
+                        {itensPreview.every((i) => i.selecionado) ? 'Desmarcar todos' : 'Marcar todos'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setItensPreview([]);
+                          setIgnoradosOutroMes(0);
+                        }}
+                        className="text-xs text-rose-400 hover:underline cursor-pointer"
+                      >
+                        Limpar lista
+                      </button>
+                    </div>
                   </div>
 
                   <div className="space-y-2 max-h-[340px] overflow-y-auto pr-1">
@@ -1022,7 +957,7 @@ export function ImportadorExtratoBancario({
                         key={item.idTemp}
                         className={`border rounded-xl p-3 flex flex-col md:flex-row md:items-center justify-between gap-2.5 transition ${
                           !item.selecionado
-                            ? 'bg-zinc-950/40 border-zinc-800/40 opacity-50'
+                            ? 'bg-zinc-950/40 border-zinc-800/40 opacity-55'
                             : item.tipo === 'transferencia_interna'
                             ? 'bg-zinc-950/90 border-amber-500/40'
                             : 'bg-zinc-950/90 border-zinc-800'
@@ -1059,11 +994,18 @@ export function ImportadorExtratoBancario({
                               placeholder="Descrição / Nome do gasto"
                               className="w-full bg-zinc-900 border border-zinc-800 focus:border-emerald-500 rounded-lg px-2.5 py-1 text-xs font-semibold text-white focus:outline-none"
                             />
-                            {item.motivoAuto && (
-                              <span className="text-[10px] text-amber-400 flex items-center gap-1 mt-0.5">
-                                <ArrowLeftRight size={10} /> {item.motivoAuto} (Não altera saldo)
-                              </span>
-                            )}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {item.duplicado && (
+                                <span className="text-[10px] text-amber-300 flex items-center gap-1 mt-0.5">
+                                  <CopyCheck size={10} /> Já consta no extrato deste mês
+                                </span>
+                              )}
+                              {item.motivoAuto && (
+                                <span className="text-[10px] text-amber-400 flex items-center gap-1 mt-0.5">
+                                  <ArrowLeftRight size={10} /> {item.motivoAuto} (Não altera saldo)
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
 
@@ -1144,9 +1086,22 @@ export function ImportadorExtratoBancario({
                             ))}
                           </select>
 
-                          <span className="text-xs font-extrabold text-white min-w-[78px] text-right">
-                            {formatarMoeda(item.valor)}
-                          </span>
+                          <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1">
+                            <span className="text-[10px] text-zinc-400">R$</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={item.valor}
+                              onChange={(e) => {
+                                const val = parseFloat(e.target.value);
+                                if (!isNaN(val) && val >= 0) {
+                                  atualizarItemPreview(item.idTemp, { valor: val });
+                                }
+                              }}
+                              className="w-16 text-xs font-extrabold text-white text-right bg-transparent focus:outline-none"
+                            />
+                          </div>
 
                           <button
                             type="button"

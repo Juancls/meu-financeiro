@@ -22,6 +22,9 @@ import {
   AlertCircle,
   Pencil,
   LogOut,
+  CheckSquare,
+  Trash2,
+  CreditCard,
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
 import {
@@ -33,6 +36,11 @@ import {
   type CategoryBudget,
   type EnxovalItem,
   type ObservacaoMes,
+  CATEGORIAS_DESPESA,
+  CATEGORIAS_RECEITA,
+  CATEGORIAS_POUPANCA,
+  CATEGORIAS_RESGATE,
+  CATEGORIAS_TRANSFERENCIA,
   ORCAMENTOS_INICIAIS,
   obterMesAtualLocal,
   formatarMoeda,
@@ -43,9 +51,18 @@ import { ModalTransacao } from './components/ModalTransacao';
 import { ModalConfigCasal } from './components/ModalConfigCasal';
 import { AbaEnxoval } from './components/AbaEnxoval';
 import { AbaObservacoes } from './components/AbaObservacoes';
-import { ImportadorPlanilhaGastos } from './components/ImportadorPlanilhaGastos';
 import { ImportadorExtratoBancario } from './components/ImportadorExtratoBancario';
 import { TelaLogin } from './components/TelaLogin';
+
+const TODAS_CATEGORIAS = Array.from(
+  new Set([
+    ...CATEGORIAS_DESPESA,
+    ...CATEGORIAS_RECEITA,
+    ...CATEGORIAS_POUPANCA,
+    ...CATEGORIAS_RESGATE,
+    ...CATEGORIAS_TRANSFERENCIA,
+  ])
+);
 
 export default function App() {
   // --- USUÁRIO LOGADO ('casal' ou 'vitoria') ---
@@ -80,9 +97,16 @@ export default function App() {
   const [metaPoupanca, setMetaPoupanca] = useState<number>(10000);
   const [orcamentos, setOrcamentos] = useState<CategoryBudget[]>(ORCAMENTOS_INICIAIS);
 
-  // --- EDIÇÃO DE METAS (POUPANÇA E TETO DE GASTOS DO MÊS) ---
+  // --- FILTROS DO EXTRATO & SELEÇÃO EM LOTE ---
   const [busca, setBusca] = useState('');
   const [filtroTipo, setFiltroTipo] = useState<'todos' | TransactionType>('todos');
+  const [filtroCategoria, setFiltroCategoria] = useState<string>('todas');
+  const [filtroMetodo, setFiltroMetodo] = useState<'todos' | PaymentMethod>('todos');
+  const [modoSelecao, setModoSelecao] = useState(false);
+  const [idsSelecionados, setIdsSelecionados] = useState<string[]>([]);
+  const [confirmandoExclusaoLote, setConfirmandoExclusaoLote] = useState(false);
+
+  // --- EDIÇÃO DE METAS (POUPANÇA E TETO DE GASTOS DO MÊS) ---
   const [editandoMeta, setEditandoMeta] = useState(false);
   const [novaMetaInput, setNovaMetaInput] = useState('10000');
   const [editandoOrcamentos, setEditandoOrcamentos] = useState(false);
@@ -99,6 +123,8 @@ export default function App() {
     setPessoa1(localStorage.getItem(`${prefixoStorage}:pessoa1`) || p1Padrao);
     setPessoa2(localStorage.getItem(`${prefixoStorage}:pessoa2`) || p2Padrao);
     setFiltroPessoaGlobal('Todos');
+    setModoSelecao(false);
+    setIdsSelecionados([]);
 
     try {
       const trSalvas = localStorage.getItem(`${prefixoStorage}:transacoes`);
@@ -283,6 +309,7 @@ export default function App() {
     setMesSelecionado(
       `${novaData.getFullYear()}-${String(novaData.getMonth() + 1).padStart(2, '0')}`
     );
+    setIdsSelecionados([]);
   };
 
   // --- CÁLCULOS FINANCEIROS (IGNORA MOVIMENTAÇÕES INTERNAS NO SALDO) ---
@@ -312,7 +339,7 @@ export default function App() {
       despesas,
       poupadoMes,
       resgatadoMes,
-      saldoLivre: receitas - despesas - poupadoMes,
+      saldoLivre: receitas + resgatadoMes - despesas - poupadoMes,
     };
   }, [transacoesDoMes]);
 
@@ -393,66 +420,11 @@ export default function App() {
     }
   };
 
-  // --- IMPORTAÇÃO DA PLANILHA ANTIGA (JAN A JUL) ---
-  const handleImportarPlanilhaAntiga = async (
-    novasTransacoes: Transaction[],
-    novasObservacoes: ObservacaoMes[]
-  ) => {
-    setTransacoes((prev) => {
-      const mapa = new Map<string, Transaction>();
-      prev.forEach((t) => mapa.set(t.id, t));
-      novasTransacoes.forEach((t) => mapa.set(t.id, t));
-      return Array.from(mapa.values());
-    });
-
-    setObservacoesMes((prev) => {
-      const mapa = new Map<string, ObservacaoMes>();
-      prev.forEach((o) => mapa.set(o.id, o));
-      novasObservacoes.forEach((o) => mapa.set(o.id, o));
-      return Array.from(mapa.values());
-    });
-
-    if (supabase) {
-      const payloadTrans = novasTransacoes.map((t) => ({
-        id: `${contaAtiva}-${t.id}`,
-        tipo: t.tipo,
-        valor: t.valor,
-        data: t.data,
-        local: t.local,
-        categoria: t.categoria,
-        tags: t.tags,
-        metodo_pagamento: t.metodoPagamento,
-        parcela_info: t.parcelaInfo || null,
-        responsavel: t.responsavel,
-        conta_id: contaAtiva,
-      }));
-
-      await supabase.from('transacoes').upsert(payloadTrans);
-
-      if (novasObservacoes.length > 0) {
-        const payloadObs = novasObservacoes.map((o) => ({
-          id: `${contaAtiva}-${o.id}`,
-          mes: o.mes,
-          autor: o.autor,
-          titulo: o.titulo,
-          texto: o.texto,
-          valor: o.valor || 0,
-          resolvido: o.resolvido,
-          data_criacao: o.dataCriacao,
-          conta_id: contaAtiva,
-        }));
-        await supabase.from('observacoes_mes').upsert(payloadObs);
-      }
-    }
-
-    setMesSelecionado('2026-08');
-  };
-
-  // --- IMPORTAÇÃO DE EXTRATOS BANCÁRIOS (.CSV, .OFX, .TXT) ---
+  // --- IMPORTAÇÃO DE EXTRATOS BANCÁRIOS (.CSV, .OFX, .TXT, .PDF) ---
   const handleImportarExtratoBancario = async (novosLancamentos: Transaction[]) => {
     const comConta = novosLancamentos.map((t) => ({
       ...t,
-      id: `${contaAtiva}-${t.id}`,
+      id: t.id.startsWith(`${contaAtiva}-`) ? t.id : `${contaAtiva}-${t.id}`,
     }));
 
     setTransacoes((prev) => [...comConta, ...prev]);
@@ -598,9 +570,64 @@ export default function App() {
 
   const handleExcluir = async (id: string) => {
     setTransacoes((prev) => prev.filter((t) => t.id !== id));
+    setIdsSelecionados((prev) => prev.filter((item) => item !== id));
     if (supabase) {
       await supabase.from('transacoes').delete().eq('id', id);
     }
+  };
+
+  // --- AÇÕES EM LOTE NO EXTRATO ---
+  const alternarSelecaoItem = (id: string) => {
+    setIdsSelecionados((prev) =>
+      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
+    );
+  };
+
+  const handleExcluirSelecionados = async () => {
+    if (idsSelecionados.length === 0) return;
+    const paraRemover = new Set(idsSelecionados);
+    setTransacoes((prev) => prev.filter((t) => !paraRemover.has(t.id)));
+    if (supabase) {
+      await supabase.from('transacoes').delete().in('id', idsSelecionados);
+    }
+    setIdsSelecionados([]);
+    setConfirmandoExclusaoLote(false);
+    setModoSelecao(false);
+  };
+
+  const handleAlterarLote = async (campos: Partial<Pick<Transaction, 'categoria' | 'responsavel'>>) => {
+    if (idsSelecionados.length === 0) return;
+    const conjunto = new Set(idsSelecionados);
+    const atualizadas: Transaction[] = [];
+
+    setTransacoes((prev) =>
+      prev.map((t) => {
+        if (!conjunto.has(t.id)) return t;
+        const mod = { ...t, ...campos };
+        atualizadas.push(mod);
+        return mod;
+      })
+    );
+
+    if (supabase && atualizadas.length > 0) {
+      const payload = atualizadas.map((t) => ({
+        id: t.id,
+        tipo: t.tipo,
+        valor: t.valor,
+        data: t.data,
+        local: t.local,
+        categoria: t.categoria,
+        tags: t.tags,
+        metodo_pagamento: t.metodoPagamento,
+        parcela_info: t.parcelaInfo || null,
+        responsavel: t.responsavel,
+        conta_id: contaAtiva,
+      }));
+      await supabase.from('transacoes').upsert(payload);
+    }
+
+    setIdsSelecionados([]);
+    setModoSelecao(false);
   };
 
   const handleAbrirEditarTransacao = (t: Transaction) => {
@@ -610,46 +637,29 @@ export default function App() {
 
   // --- AÇÕES DO ENXOVAL ---
   const handleSalvarItemEnxoval = async (item: EnxovalItem) => {
+    const idSeguro =
+      contaAtiva && !item.id.startsWith(`${contaAtiva}-`)
+        ? `${contaAtiva}-${item.id}`
+        : item.id;
+    const itemFinal = { ...item, id: idSeguro };
+
     setItensEnxoval((prev) => {
-      const existe = prev.some((i) => i.id === item.id);
-      return existe ? prev.map((i) => (i.id === item.id ? item : i)) : [item, ...prev];
+      const existe = prev.some((i) => i.id === itemFinal.id);
+      return existe ? prev.map((i) => (i.id === itemFinal.id ? itemFinal : i)) : [itemFinal, ...prev];
     });
 
     if (supabase) {
       await supabase.from('enxoval').upsert({
-        id: item.id,
-        comodo: item.comodo,
-        item: item.item,
-        quantidade: item.quantidade,
-        valor: item.valor,
-        prioridade: item.prioridade,
-        observacao: item.observacao,
-        comprado: item.comprado,
+        id: itemFinal.id,
+        comodo: itemFinal.comodo,
+        item: itemFinal.item,
+        quantidade: itemFinal.quantidade,
+        valor: itemFinal.valor,
+        prioridade: itemFinal.prioridade,
+        observacao: itemFinal.observacao,
+        comprado: itemFinal.comprado,
         conta_id: contaAtiva,
       });
-    }
-  };
-
-  const handleImportarEnxovalEmLote = async (novosItens: EnxovalItem[]) => {
-    const itensComConta = novosItens.map((i) => ({
-      ...i,
-      id: `${contaAtiva}-${i.id}`,
-    }));
-    setItensEnxoval((prev) => [...itensComConta, ...prev]);
-
-    if (supabase) {
-      const payload = itensComConta.map((item) => ({
-        id: item.id,
-        comodo: item.comodo,
-        item: item.item,
-        quantidade: item.quantidade,
-        valor: item.valor,
-        prioridade: item.prioridade,
-        observacao: item.observacao,
-        comprado: item.comprado,
-        conta_id: contaAtiva,
-      }));
-      await supabase.from('enxoval').upsert(payload);
     }
   };
 
@@ -667,21 +677,27 @@ export default function App() {
 
   // --- AÇÕES DAS OBSERVAÇÕES DO MÊS ---
   const handleSalvarObservacao = async (obs: ObservacaoMes) => {
+    const idSeguro =
+      contaAtiva && !obs.id.startsWith(`${contaAtiva}-`)
+        ? `${contaAtiva}-${obs.id}`
+        : obs.id;
+    const obsFinal = { ...obs, id: idSeguro };
+
     setObservacoesMes((prev) => {
-      const existe = prev.some((o) => o.id === obs.id);
-      return existe ? prev.map((o) => (o.id === obs.id ? obs : o)) : [obs, ...prev];
+      const existe = prev.some((o) => o.id === obsFinal.id);
+      return existe ? prev.map((o) => (o.id === obsFinal.id ? obsFinal : o)) : [obsFinal, ...prev];
     });
 
     if (supabase) {
       await supabase.from('observacoes_mes').upsert({
-        id: obs.id,
-        mes: obs.mes,
-        autor: obs.autor,
-        titulo: obs.titulo,
-        texto: obs.texto,
-        valor: obs.valor || 0,
-        resolvido: obs.resolvido,
-        data_criacao: obs.dataCriacao,
+        id: obsFinal.id,
+        mes: obsFinal.mes,
+        autor: obsFinal.autor,
+        titulo: obsFinal.titulo,
+        texto: obsFinal.texto,
+        valor: obsFinal.valor || 0,
+        resolvido: obsFinal.resolvido,
+        data_criacao: obsFinal.dataCriacao,
         conta_id: contaAtiva,
       });
     }
@@ -740,15 +756,29 @@ export default function App() {
   const transacoesFiltradas = useMemo(() => {
     return transacoesDoMes.filter((t) => {
       const bateTipo = filtroTipo === 'todos' || t.tipo === filtroTipo;
+      const bateCat = filtroCategoria === 'todas' || t.categoria === filtroCategoria;
+      const bateMetodo = filtroMetodo === 'todos' || t.metodoPagamento === filtroMetodo;
       const termo = busca.toLowerCase();
       const bateBusca =
         t.local.toLowerCase().includes(termo) ||
         t.categoria.toLowerCase().includes(termo) ||
         t.responsavel.toLowerCase().includes(termo) ||
         t.tags.some((tag) => tag.toLowerCase().includes(termo));
-      return bateTipo && bateBusca;
+      return bateTipo && bateCat && bateMetodo && bateBusca;
     });
-  }, [transacoesDoMes, filtroTipo, busca]);
+  }, [transacoesDoMes, filtroTipo, filtroCategoria, filtroMetodo, busca]);
+
+  const resumoFiltradoExtrato = useMemo(() => {
+    let entradas = 0;
+    let gastos = 0;
+    let poupanca = 0;
+    transacoesFiltradas.forEach((t) => {
+      if (t.tipo === 'receita') entradas += t.valor;
+      if (t.tipo === 'despesa') gastos += t.valor;
+      if (t.tipo === 'poupanca') poupanca += t.valor;
+    });
+    return { entradas, gastos, poupanca, saldo: entradas - gastos - poupanca };
+  }, [transacoesFiltradas]);
 
   const gastosPorCategoria = useMemo(() => {
     const mapa: Record<string, number> = {};
@@ -762,25 +792,48 @@ export default function App() {
       .sort((a, b) => b.total - a.total);
   }, [transacoesDoMes]);
 
+  const gastosPorMetodo = useMemo(() => {
+    const mapa: Record<PaymentMethod, number> = {
+      'Cartão de Crédito': 0,
+      'Pix/Débito': 0,
+      Dinheiro: 0,
+    };
+    transacoesDoMes
+      .filter((t) => t.tipo === 'despesa')
+      .forEach((t) => {
+        mapa[t.metodoPagamento] = (mapa[t.metodoPagamento] || 0) + t.valor;
+      });
+    return Object.entries(mapa)
+      .map(([metodo, total]) => ({ metodo: metodo as PaymentMethod, total }))
+      .filter((m) => m.total > 0)
+      .sort((a, b) => b.total - a.total);
+  }, [transacoesDoMes]);
+
   // SE NÃO ESTIVER LOGADO, EXIBE A TELA DE VERIFICAÇÃO DE USUÁRIO
   if (!contaAtiva) {
     return <TelaLogin onEntrar={(conta) => setContaAtiva(conta)} />;
   }
 
   const qtdObsDoMes = observacoesMes.filter((o) => o.mes === mesSelecionado).length;
+  const mesAtual = obterMesAtualLocal();
 
   const itensMenu = [
-    { id: 'home' as ActiveTab, label: 'Início', icone: Home },
-    { id: 'extrato' as ActiveTab, label: 'Extrato', icone: List },
-    { id: 'observacoes' as ActiveTab, label: 'Notas do Mês', icone: FileText, badge: qtdObsDoMes },
-    { id: 'enxoval' as ActiveTab, label: 'Enxoval Casa', icone: Package },
-    { id: 'metas' as ActiveTab, label: 'Poupança & Metas', icone: Target },
-    { id: 'graficos' as ActiveTab, label: 'Análise', icone: PieChartIcon },
+    { id: 'home' as ActiveTab, label: 'Início', shortLabel: 'Início', icone: Home },
+    { id: 'extrato' as ActiveTab, label: 'Extrato', shortLabel: 'Extrato', icone: List },
+    {
+      id: 'observacoes' as ActiveTab,
+      label: 'Notas do Mês',
+      shortLabel: 'Notas',
+      icone: FileText,
+      badge: qtdObsDoMes,
+    },
+    { id: 'enxoval' as ActiveTab, label: 'Enxoval Casa', shortLabel: 'Enxoval', icone: Package },
+    { id: 'metas' as ActiveTab, label: 'Poupança & Metas', shortLabel: 'Poupança', icone: Target },
+    { id: 'graficos' as ActiveTab, label: 'Análise', shortLabel: 'Análise', icone: PieChartIcon },
   ];
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col md:flex-row font-sans selection:bg-emerald-500 selection:text-zinc-950 overflow-x-hidden w-full">
-      
       {/* ==================== SIDEBAR DESKTOP (PC) ==================== */}
       <aside className="hidden md:flex md:w-64 lg:w-72 md:flex-col md:fixed md:inset-y-0 bg-zinc-900/60 border-r border-zinc-800/80 p-5 justify-between z-30">
         <div className="space-y-6">
@@ -798,6 +851,7 @@ export default function App() {
                 </span>
               </div>
             </div>
+
             <button
               onClick={() => setModalConfigAberto(true)}
               className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white transition cursor-pointer"
@@ -849,10 +903,6 @@ export default function App() {
         </div>
 
         <div className="pt-4 border-t border-zinc-800/80 space-y-2">
-          {contaAtiva === 'casal' && (
-            <ImportadorPlanilhaGastos onImportarDados={handleImportarPlanilhaAntiga} />
-          )}
-
           <button
             onClick={carregarDadosNuvem}
             className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-zinc-300 hover:border-zinc-700 transition cursor-pointer"
@@ -879,7 +929,6 @@ export default function App() {
 
       {/* ==================== ÁREA PRINCIPAL ==================== */}
       <div className="flex-1 md:pl-64 lg:pl-72 flex flex-col min-h-screen pb-28 md:pb-10 w-full overflow-x-hidden">
-        
         {/* HEADER RESPONSIVO */}
         <header className="sticky top-0 z-20 bg-zinc-950/90 backdrop-blur-md border-b border-zinc-800/80 px-4 md:px-8 py-3 w-full">
           <div className="max-w-6xl mx-auto flex flex-col gap-3 w-full">
@@ -910,22 +959,33 @@ export default function App() {
 
               <div className="flex items-center gap-1.5 ml-auto shrink-0">
                 {abaAtiva !== 'enxoval' && (
-                  <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-full px-1.5 py-1">
-                    <button
-                      onClick={() => mudarMes(-1)}
-                      className="p-1 text-zinc-400 hover:text-white transition cursor-pointer"
-                    >
-                      <ChevronLeft size={16} />
-                    </button>
-                    <span className="text-xs md:text-sm font-medium px-1.5 min-w-[100px] md:min-w-[140px] text-center truncate">
-                      {nomeMesAno(mesSelecionado)}
-                    </span>
-                    <button
-                      onClick={() => mudarMes(1)}
-                      className="p-1 text-zinc-400 hover:text-white transition cursor-pointer"
-                    >
-                      <ChevronRight size={16} />
-                    </button>
+                  <div className="flex items-center gap-1.5">
+                    {mesSelecionado !== mesAtual && (
+                      <button
+                        onClick={() => setMesSelecionado(mesAtual)}
+                        className="text-[11px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 px-2.5 py-1 rounded-full hover:bg-emerald-500/25 transition cursor-pointer"
+                        title="Voltar para o mês atual"
+                      >
+                        Mês Atual
+                      </button>
+                    )}
+                    <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-full px-1.5 py-1">
+                      <button
+                        onClick={() => mudarMes(-1)}
+                        className="p-1 text-zinc-400 hover:text-white transition cursor-pointer"
+                      >
+                        <ChevronLeft size={16} />
+                      </button>
+                      <span className="text-xs md:text-sm font-medium px-1.5 min-w-[100px] md:min-w-[140px] text-center truncate">
+                        {nomeMesAno(mesSelecionado)}
+                      </span>
+                      <button
+                        onClick={() => mudarMes(1)}
+                        className="p-1 text-zinc-400 hover:text-white transition cursor-pointer"
+                      >
+                        <ChevronRight size={16} />
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -983,7 +1043,6 @@ export default function App() {
 
         {/* CONTEÚDO CENTRAL */}
         <main className="flex-1 px-4 md:px-8 py-5 max-w-6xl w-full mx-auto space-y-6">
-          
           {/* ABA 1: HOME */}
           {abaAtiva === 'home' && (
             <div className="space-y-6">
@@ -1140,31 +1199,132 @@ export default function App() {
             </div>
           )}
 
-          {/* ABA 2: EXTRATO (COM IMPORTADOR DE EXTRATOS BANCÁRIOS + PLANILHA ANTIGA) */}
+          {/* ABA 2: EXTRATO */}
           {abaAtiva === 'extrato' && (
             <div className="space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                   <h2 className="text-lg font-bold">Extrato Compartilhado</h2>
                   <p className="text-xs text-zinc-400">
-                    {transacoesFiltradas.length} registro(s) encontrado(s) em {nomeMesAno(mesSelecionado)}
+                    {transacoesFiltradas.length} registro(s) encontrado(s) em{' '}
+                    {nomeMesAno(mesSelecionado)}
                   </p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => {
+                      setModoSelecao(!modoSelecao);
+                      setIdsSelecionados([]);
+                      setConfirmandoExclusaoLote(false);
+                    }}
+                    className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border transition cursor-pointer ${
+                      modoSelecao
+                        ? 'bg-zinc-100 text-zinc-950 border-white'
+                        : 'bg-zinc-900 text-zinc-300 border-zinc-800 hover:border-zinc-700'
+                    }`}
+                  >
+                    <CheckSquare size={14} />
+                    {modoSelecao ? 'Sair da Seleção' : 'Selecionar Vários'}
+                  </button>
+
                   <ImportadorExtratoBancario
                     mesSelecionado={mesSelecionado}
                     pessoa1={pessoa1}
                     pessoa2={pessoa2}
+                    transacoesExistentes={transacoes}
                     onImportarLancamentos={handleImportarExtratoBancario}
                   />
-
-                  {contaAtiva === 'casal' && (
-                    <ImportadorPlanilhaGastos onImportarDados={handleImportarPlanilhaAntiga} />
-                  )}
                 </div>
               </div>
 
+              {/* BARRA DE AÇÕES EM LOTE QUANDO MODO SELEÇÃO ESTÁ ATIVO */}
+              {modoSelecao && (
+                <div className="bg-zinc-900 border border-emerald-500/40 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => {
+                        const todosIds = transacoesFiltradas.map((t) => t.id);
+                        const todosMarcados =
+                          todosIds.length > 0 &&
+                          todosIds.every((id) => idsSelecionados.includes(id));
+                        setIdsSelecionados(todosMarcados ? [] : todosIds);
+                      }}
+                      className="text-xs font-bold text-emerald-400 hover:underline cursor-pointer"
+                    >
+                      {transacoesFiltradas.length > 0 &&
+                      transacoesFiltradas.every((t) => idsSelecionados.includes(t.id))
+                        ? 'Desmarcar todos'
+                        : 'Selecionar todos visíveis'}
+                    </button>
+                    <span className="text-xs text-zinc-400">
+                      <strong>{idsSelecionados.length}</strong> selecionado(s)
+                    </span>
+                  </div>
+
+                  {idsSelecionados.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <select
+                        defaultValue=""
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            handleAlterarLote({ responsavel: e.target.value });
+                            e.target.value = '';
+                          }
+                        }}
+                        className="bg-zinc-950 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200"
+                      >
+                        <option value="" disabled>
+                          Mudar pessoa...
+                        </option>
+                        {[pessoa1, pessoa2, 'Casal'].map((r) => (
+                          <option key={r} value={r}>
+                            {r}
+                          </option>
+                        ))}
+                      </select>
+
+                      <select
+                        defaultValue=""
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            handleAlterarLote({ categoria: e.target.value });
+                            e.target.value = '';
+                          }
+                        }}
+                        className="bg-zinc-950 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200"
+                      >
+                        <option value="" disabled>
+                          Mudar categoria...
+                        </option>
+                        {TODAS_CATEGORIAS.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+
+                      {confirmandoExclusaoLote ? (
+                        <button
+                          onClick={handleExcluirSelecionados}
+                          className="bg-rose-500 hover:bg-rose-400 text-white px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer"
+                        >
+                          Confirmar Exclusão ({idsSelecionados.length})
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmandoExclusaoLote(true)}
+                          className="bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                        >
+                          <Trash2 size={13} /> Excluir ({idsSelecionados.length})
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* FILTROS POR TIPO */}
               <div className="flex gap-2 overflow-x-auto pb-1">
                 {(
                   [
@@ -1190,16 +1350,75 @@ export default function App() {
                 ))}
               </div>
 
-              <div className="relative">
-                <Search size={16} className="absolute left-3.5 top-3 text-zinc-500" />
-                <input
-                  type="text"
-                  placeholder="Buscar local, pessoa, categoria ou #tag..."
-                  value={busca}
-                  onChange={(e) => setBusca(e.target.value)}
-                  className="w-full bg-zinc-900 border border-zinc-800 rounded-xl pl-10 pr-4 py-2.5 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500"
-                />
+              {/* BUSCA + FILTROS RÁPIDOS DE CATEGORIA E MÉTODO */}
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+                <div className="relative sm:col-span-6">
+                  <Search size={16} className="absolute left-3.5 top-3 text-zinc-500" />
+                  <input
+                    type="text"
+                    placeholder="Buscar local, pessoa, categoria ou #tag..."
+                    value={busca}
+                    onChange={(e) => setBusca(e.target.value)}
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded-xl pl-10 pr-4 py-2.5 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+
+                <div className="sm:col-span-3">
+                  <select
+                    value={filtroCategoria}
+                    onChange={(e) => setFiltroCategoria(e.target.value)}
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2.5 text-xs md:text-sm text-zinc-200 focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="todas">Todas as Categorias</option>
+                    {TODAS_CATEGORIAS.map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="sm:col-span-3">
+                  <select
+                    value={filtroMetodo}
+                    onChange={(e) => setFiltroMetodo(e.target.value as 'todos' | PaymentMethod)}
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2.5 text-xs md:text-sm text-zinc-200 focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="todos">Todos os Métodos</option>
+                    <option value="Pix/Débito">Pix / Débito</option>
+                    <option value="Cartão de Crédito">Cartão de Crédito</option>
+                    <option value="Dinheiro">Dinheiro</option>
+                  </select>
+                </div>
               </div>
+
+              {/* TOTALIZADOR DINÂMICO DO FILTRO ATUAL */}
+              {transacoesFiltradas.length > 0 && (
+                <div className="grid grid-cols-3 gap-2.5 bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-3 text-xs">
+                  <div>
+                    <span className="text-zinc-400 block text-[11px]">Gastos no filtro</span>
+                    <strong className="text-rose-400 text-xs md:text-sm">
+                      {formatarMoeda(resumoFiltradoExtrato.gastos)}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-zinc-400 block text-[11px]">Entradas no filtro</span>
+                    <strong className="text-emerald-400 text-xs md:text-sm">
+                      {formatarMoeda(resumoFiltradoExtrato.entradas)}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-zinc-400 block text-[11px]">Balanço do filtro</span>
+                    <strong
+                      className={`text-xs md:text-sm ${
+                        resumoFiltradoExtrato.saldo >= 0 ? 'text-zinc-100' : 'text-rose-400'
+                      }`}
+                    >
+                      {formatarMoeda(resumoFiltradoExtrato.saldo)}
+                    </strong>
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                 {transacoesFiltradas.map((t) => (
@@ -1209,6 +1428,9 @@ export default function App() {
                     pessoa1={pessoa1}
                     onEditar={handleAbrirEditarTransacao}
                     onExcluir={handleExcluir}
+                    modoSelecao={modoSelecao}
+                    selecionado={idsSelecionados.includes(t.id)}
+                    onAlternarSelecao={alternarSelecaoItem}
                   />
                 ))}
               </div>
@@ -1233,7 +1455,6 @@ export default function App() {
             <AbaEnxoval
               itens={itensEnxoval}
               onSalvarItem={handleSalvarItemEnxoval}
-              onImportarEmLote={handleImportarEnxovalEmLote}
               onAlternarComprado={handleAlternarCompradoEnxoval}
               onExcluirItem={handleExcluirItemEnxoval}
             />
@@ -1481,105 +1702,164 @@ export default function App() {
             </div>
           )}
 
-          {/* ABA 4: ANÁLISE */}
+          {/* ABA 4: ANÁLISE COMPLETA */}
           {abaAtiva === 'graficos' && (
-            <div className="space-y-5 max-w-3xl">
-              <h2 className="text-lg font-bold">Análise de Gastos por Categoria</h2>
-              {gastosPorCategoria.length === 0 ? (
-                <p className="text-sm text-zinc-500 py-8 text-center">Sem despesas neste mês.</p>
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-lg font-bold">Análise de {nomeMesAno(mesSelecionado)}</h2>
+                <p className="text-xs text-zinc-400">
+                  Visão consolidada por categoria, método de pagamento e divisão entre responsáveis
+                </p>
+              </div>
+
+              {resumoMes.despesas === 0 ? (
+                <div className="text-center py-12 bg-zinc-900/40 border border-zinc-800/60 rounded-2xl">
+                  <p className="text-sm text-zinc-400">Sem despesas registradas neste mês.</p>
+                </div>
               ) : (
-                <div className="bg-zinc-900/70 border border-zinc-800 rounded-2xl p-5 space-y-4">
-                  {gastosPorCategoria.map((item) => {
-                    const pct = Math.round((item.total / resumoMes.despesas) * 100) || 0;
-                    return (
-                      <div key={item.categoria} className="space-y-1.5">
-                        <div className="flex justify-between text-xs md:text-sm">
-                          <span className="font-medium text-zinc-200">{item.categoria}</span>
-                          <span className="text-zinc-400">
-                            <strong className="text-zinc-100">{formatarMoeda(item.total)}</strong> ({pct}%)
-                          </span>
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+                  {/* COLUNA ESQUERDA: CATEGORIAS */}
+                  <div className="lg:col-span-7 bg-zinc-900/70 border border-zinc-800 rounded-2xl p-5 space-y-4">
+                    <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                      Gastos por Categoria
+                    </h3>
+                    {gastosPorCategoria.map((item) => {
+                      const pctTotal = Math.round((item.total / resumoMes.despesas) * 100) || 0;
+                      const orc = orcamentos.find((o) => o.categoria === item.categoria);
+                      const estourou = orc && orc.limite > 0 && item.total > orc.limite;
+
+                      return (
+                        <div key={item.categoria} className="space-y-1.5">
+                          <div className="flex justify-between text-xs md:text-sm">
+                            <span className="font-medium text-zinc-200 flex items-center gap-2">
+                              {item.categoria}
+                              {estourou && (
+                                <span className="text-[10px] bg-rose-500/20 text-rose-300 px-1.5 py-0.5 rounded font-semibold">
+                                  Acima da meta
+                                </span>
+                              )}
+                            </span>
+                            <span className="text-zinc-400">
+                              <strong className="text-zinc-100">{formatarMoeda(item.total)}</strong>{' '}
+                              ({pctTotal}%)
+                            </span>
+                          </div>
+                          <div className="w-full h-2.5 bg-zinc-950 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full ${
+                                estourou ? 'bg-rose-500' : 'bg-emerald-400'
+                              }`}
+                              style={{ width: `${pctTotal}%` }}
+                            />
+                          </div>
                         </div>
-                        <div className="w-full h-2.5 bg-zinc-950 rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-emerald-400 rounded-full"
-                            style={{ width: `${pct}%` }}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
+
+                  {/* COLUNA DIREITA: MÉTODO DE PAGAMENTO + POR PESSOA */}
+                  <div className="lg:col-span-5 space-y-5">
+                    <div className="bg-zinc-900/70 border border-zinc-800 rounded-2xl p-5 space-y-4">
+                      <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                        <CreditCard size={16} className="text-emerald-400" />
+                        Por Método de Pagamento
+                      </h3>
+                      {gastosPorMetodo.map((m) => {
+                        const pct = Math.round((m.total / resumoMes.despesas) * 100) || 0;
+                        return (
+                          <div key={m.metodo} className="space-y-1.5">
+                            <div className="flex justify-between text-xs">
+                              <span className="font-semibold text-zinc-200">{m.metodo}</span>
+                              <span className="text-zinc-400">
+                                <strong className="text-white">{formatarMoeda(m.total)}</strong> ({pct}%)
+                              </span>
+                            </div>
+                            <div className="w-full h-2 bg-zinc-950 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${
+                                  m.metodo === 'Cartão de Crédito' ? 'bg-amber-400' : 'bg-sky-400'
+                                }`}
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="bg-zinc-900/70 border border-zinc-800 rounded-2xl p-5 space-y-4">
+                      <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                        <Users size={16} className="text-emerald-400" />
+                        Participação nos Gastos do Mês
+                      </h3>
+                      {[
+                        { nome: pessoa1, valor: resumoPorPessoa.p1Gastos, cor: 'bg-indigo-400' },
+                        { nome: pessoa2, valor: resumoPorPessoa.p2Gastos, cor: 'bg-pink-400' },
+                        { nome: 'Casal', valor: resumoPorPessoa.casalGastos, cor: 'bg-amber-400' },
+                      ].map((p) => {
+                        const totalGeralMes =
+                          resumoPorPessoa.p1Gastos +
+                          resumoPorPessoa.p2Gastos +
+                          resumoPorPessoa.casalGastos;
+                        const pct =
+                          totalGeralMes > 0 ? Math.round((p.valor / totalGeralMes) * 100) : 0;
+                        return (
+                          <div key={p.nome} className="space-y-1.5">
+                            <div className="flex justify-between text-xs">
+                              <span className="font-semibold text-zinc-200">{p.nome}</span>
+                              <span className="text-zinc-400">
+                                <strong className="text-white">{formatarMoeda(p.valor)}</strong> ({pct}%)
+                              </span>
+                            </div>
+                            <div className="w-full h-2 bg-zinc-950 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${p.cor}`}
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
           )}
         </main>
 
-        {/* ==================== BOTTOM NAVIGATION MOBILE ==================== */}
+        {/* BOTÃO FLUTUANTE (+) MOBILE */}
+        <button
+          onClick={() => {
+            setTransacaoEditando(null);
+            setTipoInicialModal('despesa');
+            setModalAberto(true);
+          }}
+          className="md:hidden fixed bottom-20 right-4 z-40 w-13 h-13 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 shadow-xl shadow-emerald-500/30 flex items-center justify-center transition transform active:scale-95 cursor-pointer"
+          title="Novo Lançamento"
+        >
+          <Plus size={24} strokeWidth={2.5} />
+        </button>
+
+        {/* ==================== BOTTOM NAVIGATION MOBILE (TODAS AS 6 ABAS) ==================== */}
         <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800/80">
           <div className="w-full px-1 h-16 grid grid-cols-6 items-center relative">
-            <button
-              onClick={() => setAbaAtiva('home')}
-              className={`flex flex-col items-center justify-center h-full gap-1 text-[10px] transition cursor-pointer ${
-                abaAtiva === 'home' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
-              }`}
-            >
-              <Home size={18} />
-              <span>Início</span>
-            </button>
-
-            <button
-              onClick={() => setAbaAtiva('extrato')}
-              className={`flex flex-col items-center justify-center h-full gap-1 text-[10px] transition cursor-pointer ${
-                abaAtiva === 'extrato' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
-              }`}
-            >
-              <List size={18} />
-              <span>Extrato</span>
-            </button>
-
-            <button
-              onClick={() => setAbaAtiva('observacoes')}
-              className={`flex flex-col items-center justify-center h-full gap-1 text-[10px] transition cursor-pointer ${
-                abaAtiva === 'observacoes' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
-              }`}
-            >
-              <FileText size={18} />
-              <span>Notas</span>
-            </button>
-
-            <button
-              onClick={() => setAbaAtiva('enxoval')}
-              className={`flex flex-col items-center justify-center h-full gap-1 text-[10px] transition cursor-pointer ${
-                abaAtiva === 'enxoval' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
-              }`}
-            >
-              <Package size={18} />
-              <span>Enxoval</span>
-            </button>
-
-            <button
-              onClick={() => setAbaAtiva('metas')}
-              className={`flex flex-col items-center justify-center h-full gap-1 text-[10px] transition cursor-pointer ${
-                abaAtiva === 'metas' ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
-              }`}
-            >
-              <Target size={18} />
-              <span>Poupança</span>
-            </button>
-
-            <div className="flex items-center justify-center">
-              <button
-                onClick={() => {
-                  setTransacaoEditando(null);
-                  setTipoInicialModal('despesa');
-                  setModalAberto(true);
-                }}
-                className="w-11 h-11 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 shadow-lg shadow-emerald-500/25 flex items-center justify-center transition transform active:scale-95 cursor-pointer"
-                title="Novo Lançamento"
-              >
-                <Plus size={22} strokeWidth={2.5} />
-              </button>
-            </div>
+            {itensMenu.map((item) => {
+              const Icone = item.icone;
+              const ativo = abaAtiva === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => setAbaAtiva(item.id)}
+                  className={`flex flex-col items-center justify-center h-full gap-1 text-[10px] transition cursor-pointer ${
+                    ativo ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
+                  }`}
+                >
+                  <Icone size={18} />
+                  <span className="truncate max-w-full px-0.5">{item.shortLabel}</span>
+                </button>
+              );
+            })}
           </div>
         </nav>
 
@@ -1595,6 +1875,8 @@ export default function App() {
           salvando={salvando}
           transacaoEditando={transacaoEditando}
           tipoInicial={tipoInicialModal}
+          mesSelecionado={mesSelecionado}
+          responsavelPadrao={filtroPessoaGlobal}
           onSalvar={handleSalvarTransacao}
         />
 
@@ -1603,9 +1885,7 @@ export default function App() {
           onFechar={() => setModalConfigAberto(false)}
           pessoa1={pessoa1}
           pessoa2={pessoa2}
-          onSalvarNomes={(novoP1, novoP2, novaSenha) =>
-            salvarConfigCasal(metaPoupanca, novoP1, novoP2, novaSenha)
-          }
+          onSalvarNomes={(n1, n2, novaSenha) => salvarConfigCasal(undefined, n1, n2, novaSenha)}
         />
       </div>
     </div>

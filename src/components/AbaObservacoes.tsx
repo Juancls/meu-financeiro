@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   FileText,
   Plus,
@@ -41,12 +41,19 @@ export function AbaObservacoes({
 }: AbaObservacoesProps) {
   const [modalAberto, setModalAberto] = useState(false);
   const [obsEditando, setObsEditando] = useState<ObservacaoMes | null>(null);
+  const [idConfirmandoExclusao, setIdConfirmandoExclusao] = useState<string | null>(null);
 
   const [autorForm, setAutorForm] = useState<string>(pessoa1);
   const [tituloForm, setTituloForm] = useState('');
   const [textoForm, setTextoForm] = useState('');
   const [valorForm, setValorForm] = useState('');
   const [resolvidoForm, setResolvidoForm] = useState(false);
+
+  useEffect(() => {
+    if (!idConfirmandoExclusao) return;
+    const timer = setTimeout(() => setIdConfirmandoExclusao(null), 3000);
+    return () => clearTimeout(timer);
+  }, [idConfirmandoExclusao]);
 
   const obsDoMes = observacoes.filter((o) => o.mes === mesSelecionado);
 
@@ -194,13 +201,22 @@ export function AbaObservacoes({
                       >
                         <Pencil size={14} />
                       </button>
-                      <button
-                        onClick={() => onExcluirObservacao(obs.id)}
-                        className="text-zinc-500 hover:text-rose-400 p-1.5 rounded-lg hover:bg-zinc-800/60 transition cursor-pointer"
-                        title="Excluir observação"
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                      {idConfirmandoExclusao === obs.id ? (
+                        <button
+                          onClick={() => onExcluirObservacao(obs.id)}
+                          className="text-[10px] font-bold bg-rose-500 text-white px-2 py-1 rounded-lg hover:bg-rose-400 transition cursor-pointer"
+                        >
+                          Apagar?
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => setIdConfirmandoExclusao(obs.id)}
+                          className="text-zinc-500 hover:text-rose-400 p-1.5 rounded-lg hover:bg-zinc-800/60 transition cursor-pointer"
+                          title="Excluir observação"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
                     </div>
                   </div>
 

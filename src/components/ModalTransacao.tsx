@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
-
-import { X, Users, User } from 'lucide-react';
+import { X, Users, User, Sparkles } from 'lucide-react';
 import {
   type Transaction,
   type TransactionType,
@@ -9,9 +8,11 @@ import {
   CATEGORIAS_RECEITA,
   CATEGORIAS_POUPANCA,
   CATEGORIAS_RESGATE,
+  CATEGORIAS_TRANSFERENCIA,
   obterDataHojeLocal,
+  obterMesAtualLocal,
+  sugerirCategoriaPorDescricao,
 } from '../types';
-
 
 interface ModalTransacaoProps {
   aberto: boolean;
@@ -21,6 +22,8 @@ interface ModalTransacaoProps {
   salvando: boolean;
   transacaoEditando: Transaction | null;
   tipoInicial?: TransactionType;
+  mesSelecionado?: string;
+  responsavelPadrao?: string;
   onSalvar: (dados: {
     id?: string;
     tipo: TransactionType;
@@ -43,6 +46,8 @@ export function ModalTransacao({
   salvando,
   transacaoEditando,
   tipoInicial = 'despesa',
+  mesSelecionado,
+  responsavelPadrao,
   onSalvar,
 }: ModalTransacaoProps) {
   const [tipo, setTipo] = useState<TransactionType>('despesa');
@@ -51,6 +56,7 @@ export function ModalTransacao({
   const [local, setLocal] = useState('');
   const [data, setData] = useState(() => obterDataHojeLocal());
   const [categoria, setCategoria] = useState(CATEGORIAS_DESPESA[0]);
+  const [categoriaAlteradaManual, setCategoriaAlteradaManual] = useState(false);
   const [tags, setTags] = useState('');
   const [metodoPagamento, setMetodoPagamento] = useState<PaymentMethod>('Pix/Débito');
   const [parcelas, setParcelas] = useState(1);
@@ -59,6 +65,7 @@ export function ModalTransacao({
     if (t === 'despesa') return CATEGORIAS_DESPESA[0];
     if (t === 'receita') return CATEGORIAS_RECEITA[0];
     if (t === 'poupanca') return CATEGORIAS_POUPANCA[0];
+    if (t === 'transferencia_interna') return CATEGORIAS_TRANSFERENCIA[0];
     return CATEGORIAS_RESGATE[0];
   };
 
@@ -70,24 +77,47 @@ export function ModalTransacao({
       setLocal(transacaoEditando.local);
       setData(transacaoEditando.data);
       setCategoria(transacaoEditando.categoria);
+      setCategoriaAlteradaManual(true);
       setTags(transacaoEditando.tags.map((t) => t.replace(/^#/, '')).join(', '));
       setMetodoPagamento(transacaoEditando.metodoPagamento);
       setParcelas(1);
     } else if (aberto && !transacaoEditando) {
+      const respInicial =
+        responsavelPadrao && responsavelPadrao !== 'Todos' ? responsavelPadrao : pessoa1;
+      const mesAtual = obterMesAtualLocal();
+      const dataInicial =
+        mesSelecionado && mesSelecionado !== mesAtual
+          ? `${mesSelecionado}-01`
+          : obterDataHojeLocal();
+
       setTipo(tipoInicial);
+      setResponsavel(respInicial);
       setValor('');
       setLocal('');
-      setData(obterDataHojeLocal());
+      setData(dataInicial);
       setCategoria(obterCategoriaPadrao(tipoInicial));
+      setCategoriaAlteradaManual(false);
       setTags('');
       setMetodoPagamento('Pix/Débito');
       setParcelas(1);
     }
-  }, [aberto, transacaoEditando, tipoInicial]);
+  }, [aberto, transacaoEditando, tipoInicial, pessoa1, mesSelecionado, responsavelPadrao]);
 
   const handleTrocarTipo = (novoTipo: TransactionType) => {
     setTipo(novoTipo);
-    setCategoria(obterCategoriaPadrao(novoTipo));
+    setCategoriaAlteradaManual(false);
+    const sugerida = sugerirCategoriaPorDescricao(local, novoTipo);
+    setCategoria(sugerida || obterCategoriaPadrao(novoTipo));
+  };
+
+  const handleChangeLocal = (novoLocal: string) => {
+    setLocal(novoLocal);
+    if (!categoriaAlteradaManual && !transacaoEditando) {
+      const sugerida = sugerirCategoriaPorDescricao(novoLocal, tipo);
+      if (sugerida) {
+        setCategoria(sugerida);
+      }
+    }
   };
 
   if (!aberto) return null;
@@ -133,6 +163,8 @@ export function ModalTransacao({
       ? CATEGORIAS_RECEITA
       : tipo === 'poupanca'
       ? CATEGORIAS_POUPANCA
+      : tipo === 'transferencia_interna'
+      ? CATEGORIAS_TRANSFERENCIA
       : CATEGORIAS_RESGATE;
 
   return (
@@ -150,8 +182,8 @@ export function ModalTransacao({
           </button>
         </div>
 
-        {/* TIPO (AGORA COM 4 OPÇÕES INCLUINDO RETIRAR DA POUPANÇA) */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 bg-zinc-950 p-1.5 rounded-xl border border-zinc-800">
+        {/* TIPO DE LANÇAMENTO */}
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 bg-zinc-950 p-1.5 rounded-xl border border-zinc-800">
           <button
             type="button"
             onClick={() => handleTrocarTipo('despesa')}
@@ -193,6 +225,17 @@ export function ModalTransacao({
             }`}
           >
             Tirei Poupança
+          </button>
+          <button
+            type="button"
+            onClick={() => handleTrocarTipo('transferencia_interna')}
+            className={`col-span-2 sm:col-span-1 py-2 rounded-lg text-xs font-bold transition cursor-pointer ${
+              tipo === 'transferencia_interna'
+                ? 'bg-zinc-200 text-zinc-950'
+                : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            Neutro (⇄)
           </button>
         </div>
 
@@ -260,20 +303,30 @@ export function ModalTransacao({
               placeholder={
                 tipo === 'resgate_poupanca'
                   ? 'Ex: Compra da geladeira à vista, Imprevisto...'
-                  : 'Ex: Supermercado, iFood, Salário...'
+                  : 'Ex: Supermercado, iFood, Uber, Salário...'
               }
               value={local}
-              onChange={(e) => setLocal(e.target.value)}
+              onChange={(e) => handleChangeLocal(e.target.value)}
               className="w-full mt-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"
             />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs text-zinc-400 font-medium">Categoria</label>
+              <label className="text-xs text-zinc-400 font-medium flex items-center justify-between">
+                <span>Categoria</span>
+                {!categoriaAlteradaManual && sugerirCategoriaPorDescricao(local, tipo) && (
+                  <span className="text-[10px] text-emerald-400 flex items-center gap-0.5">
+                    <Sparkles size={10} /> Auto
+                  </span>
+                )}
+              </label>
               <select
                 value={categoria}
-                onChange={(e) => setCategoria(e.target.value)}
+                onChange={(e) => {
+                  setCategoria(e.target.value);
+                  setCategoriaAlteradaManual(true);
+                }}
                 className="w-full mt-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500"
               >
                 {listaCategoriasAtuais.map((cat) => (

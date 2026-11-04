@@ -361,21 +361,21 @@ export function AbaAnalise({
         <div className="h-64 w-full">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={evolucao6Meses} margin={{ top: 10, right: 10, left: -15, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
-              <XAxis dataKey="mes" stroke="#a1a1aa" fontSize={11} tickLine={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--color-zinc-800)" vertical={false} />
+              <XAxis dataKey="mes" stroke="var(--color-zinc-400)" fontSize={11} tickLine={false} />
               <YAxis
-                stroke="#a1a1aa"
+                stroke="var(--color-zinc-400)"
                 fontSize={11}
                 tickLine={false}
                 tickFormatter={(v) => `R$${v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v}`}
               />
               <Tooltip
                 contentStyle={{
-                  backgroundColor: '#18181b',
-                  borderColor: '#3f3f46',
+                  backgroundColor: 'var(--color-zinc-900)',
+                  borderColor: 'var(--color-zinc-700)',
                   borderRadius: '12px',
                   fontSize: '12px',
-                  color: '#fff',
+                  color: 'var(--color-zinc-100)',
                 }}
                 formatter={(val: any) => formatarMoeda(Number(val))}
               />
@@ -419,11 +419,11 @@ export function AbaAnalise({
                   </Pie>
                   <Tooltip
                     contentStyle={{
-                      backgroundColor: '#18181b',
-                      borderColor: '#3f3f46',
+                      backgroundColor: 'var(--color-zinc-900)',
+                      borderColor: 'var(--color-zinc-700)',
                       borderRadius: '12px',
                       fontSize: '12px',
-                      color: '#fff',
+                      color: 'var(--color-zinc-100)',
                     }}
                     formatter={(val: any) => formatarMoeda(Number(val))}
                   />
@@ -519,16 +519,16 @@ export function AbaAnalise({
                     <stop offset="95%" stopColor="#f43f5e" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
-                <XAxis dataKey="dia" stroke="#a1a1aa" fontSize={10} tickLine={false} interval={2} />
-                <YAxis stroke="#a1a1aa" fontSize={10} tickLine={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-zinc-800)" vertical={false} />
+                <XAxis dataKey="dia" stroke="var(--color-zinc-400)" fontSize={10} tickLine={false} interval={2} />
+                <YAxis stroke="var(--color-zinc-400)" fontSize={10} tickLine={false} />
                 <Tooltip
                   contentStyle={{
-                    backgroundColor: '#18181b',
-                    borderColor: '#3f3f46',
+                    backgroundColor: 'var(--color-zinc-900)',
+                    borderColor: 'var(--color-zinc-700)',
                     borderRadius: '12px',
                     fontSize: '12px',
-                    color: '#fff',
+                    color: 'var(--color-zinc-100)',
                   }}
                   formatter={(val: any) => formatarMoeda(Number(val))}
                 />

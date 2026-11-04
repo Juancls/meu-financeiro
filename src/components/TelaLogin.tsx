@@ -1,10 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import { Wallet, Lock, UserCheck, Users, Sparkles, KeyRound, CheckCircle2, ArrowLeft } from 'lucide-react';
+import {
+  Wallet,
+  Lock,
+  UserCheck,
+  Users,
+  Sparkles,
+  KeyRound,
+  CheckCircle2,
+  ArrowLeft,
+  Sun,
+  Moon,
+} from 'lucide-react';
 import { type AccountId } from '../types';
 import { supabase } from '../supabaseClient';
 
 interface TelaLoginProps {
   onEntrar: (conta: AccountId) => void;
+  tema: 'escuro' | 'claro';
+  onAlternarTema: () => void;
 }
 
 const INFO_CONTAS: Record<AccountId, { idBanco: number; titulo: string; subtitulo: string }> = {
@@ -23,7 +36,7 @@ const INFO_CONTAS: Record<AccountId, { idBanco: number; titulo: string; subtitul
 // Código mestre caso alguém esqueça a própria senha
 const CODIGO_MESTRE_RECUPERACAO = 'admin2026';
 
-export function TelaLogin({ onEntrar }: TelaLoginProps) {
+export function TelaLogin({ onEntrar, tema, onAlternarTema }: TelaLoginProps) {
   const [contaSelecionada, setContaSelecionada] = useState<AccountId>('casal');
   const [modoRedefinir, setModoRedefinir] = useState(false);
 
@@ -164,7 +177,17 @@ export function TelaLogin({ onEntrar }: TelaLoginProps) {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-4 font-sans">
-      <div className="w-full max-w-md bg-zinc-900/80 border border-zinc-800 rounded-3xl p-6 md:p-8 shadow-2xl space-y-6">
+      <div className="w-full max-w-md bg-zinc-900/80 border border-zinc-800 rounded-3xl p-6 md:p-8 shadow-2xl space-y-6 relative">
+        <button
+          type="button"
+          onClick={onAlternarTema}
+          className="absolute top-5 right-5 p-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-400 hover:text-emerald-400 transition cursor-pointer flex items-center gap-1.5 text-xs font-medium"
+          title={tema === 'claro' ? 'Mudar para Tema Escuro' : 'Mudar para Tema Claro'}
+        >
+          {tema === 'claro' ? <Moon size={15} /> : <Sun size={15} />}
+          <span>{tema === 'claro' ? 'Escuro' : 'Claro'}</span>
+        </button>
+
         <div className="flex flex-col items-center text-center space-y-2">
           <div className="w-14 h-14 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shadow-lg shadow-emerald-500/10">
             <Wallet size={28} />

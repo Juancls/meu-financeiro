@@ -25,6 +25,8 @@ import {
   CheckSquare,
   Trash2,
   Repeat,
+  Sun,
+  Moon,
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
 import {
@@ -68,6 +70,20 @@ const TODAS_CATEGORIAS = Array.from(
 );
 
 export default function App() {
+  // --- TEMA POR NAVEGADOR / DISPOSITIVO ('escuro' | 'claro') ---
+  const [tema, setTema] = useState<'escuro' | 'claro'>(() => {
+    const salvo = localStorage.getItem('@financas:tema');
+    if (salvo === 'claro' || salvo === 'escuro') return salvo;
+    return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'claro' : 'escuro';
+  });
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('tema-claro', tema === 'claro');
+    localStorage.setItem('@financas:tema', tema);
+  }, [tema]);
+
+  const alternarTema = () => setTema((prev) => (prev === 'claro' ? 'escuro' : 'claro'));
+
   // --- USUÁRIO LOGADO ('casal' ou 'vitoria') ---
   const [contaAtiva, setContaAtiva] = useState<AccountId | null>(() => {
     const salvo = localStorage.getItem('@financas:conta_ativa');
@@ -845,7 +861,13 @@ export default function App() {
 
   // SE NÃO ESTIVER LOGADO, EXIBE A TELA DE VERIFICAÇÃO DE USUÁRIO
   if (!contaAtiva) {
-    return <TelaLogin onEntrar={(conta) => setContaAtiva(conta)} />;
+    return (
+      <TelaLogin
+        onEntrar={(conta) => setContaAtiva(conta)}
+        tema={tema}
+        onAlternarTema={alternarTema}
+      />
+    );
   }
 
   const qtdObsDoMes = observacoesMes.filter((o) => o.mes === mesSelecionado).length;
@@ -886,13 +908,22 @@ export default function App() {
               </div>
             </div>
 
-            <button
-              onClick={() => setModalConfigAberto(true)}
-              className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white transition cursor-pointer"
-              title="Configurar nomes"
-            >
-              <Settings size={16} />
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={alternarTema}
+                className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-emerald-400 transition cursor-pointer"
+                title={tema === 'claro' ? 'Ativar Tema Escuro' : 'Ativar Tema Claro'}
+              >
+                {tema === 'claro' ? <Moon size={16} /> : <Sun size={16} />}
+              </button>
+              <button
+                onClick={() => setModalConfigAberto(true)}
+                className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white transition cursor-pointer"
+                title="Configurar nomes"
+              >
+                <Settings size={16} />
+              </button>
+            </div>
           </div>
 
           <button
@@ -1022,6 +1053,14 @@ export default function App() {
                     </div>
                   </div>
                 )}
+
+                <button
+                  onClick={alternarTema}
+                  className="md:hidden p-2 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-emerald-400 shrink-0 cursor-pointer"
+                  title={tema === 'claro' ? 'Ativar Tema Escuro' : 'Ativar Tema Claro'}
+                >
+                  {tema === 'claro' ? <Moon size={15} /> : <Sun size={15} />}
+                </button>
 
                 <button
                   onClick={() => setModalConfigAberto(true)}

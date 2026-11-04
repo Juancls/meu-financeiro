@@ -445,7 +445,7 @@ export default function App() {
       }
     }
 
-    setMesSelecionado('2026-07');
+    setMesSelecionado('2026-08');
   };
 
   // --- IMPORTAÇÃO DE EXTRATOS BANCÁRIOS (.CSV, .OFX, .TXT) ---

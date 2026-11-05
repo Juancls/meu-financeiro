@@ -8,6 +8,7 @@ import {
   formatarDataBR,
   nomeMesAno,
 } from '../types';
+import type { SaldoFinalBancoMes } from './ImportadorExtratoBancario';
 
 interface ExportadorRelatorioProps {
   mesSelecionado: string;
@@ -17,6 +18,7 @@ interface ExportadorRelatorioProps {
   transacoesMes: Transaction[];
   orcamentos: CategoryBudget[];
   observacoesMes: ObservacaoMes[];
+  saldosFimMes?: SaldoFinalBancoMes[];
 }
 
 const traduzirTipo = (tipo: Transaction['tipo']) => {
@@ -42,6 +44,7 @@ export function ExportadorRelatorio({
   transacoesMes,
   orcamentos,
   observacoesMes,
+  saldosFimMes = [],
 }: ExportadorRelatorioProps) {
   const calcularDadosResumo = () => {
     let receitas = 0;
@@ -93,6 +96,22 @@ export function ExportadorRelatorio({
       ['Total Guardado na Poupança', Number(poupado.toFixed(2))],
       ['Total Resgatado da Poupança', Number(resgatado.toFixed(2))],
       ['Saldo Livre do Mês', Number(saldoLivre.toFixed(2))],
+      ...(saldosFimMes.length > 0
+        ? [
+            [],
+            ['SALDO EM CONTA NO FIM DO MÊS (EXTRATO BANCÁRIO)', 'SALDO FINAL (R$)', 'ÚLTIMO DIA REGISTRADO'],
+            ...saldosFimMes.map((s) => [
+              `${s.banco} (${s.responsavel})`,
+              Number(s.saldoFinal.toFixed(2)),
+              formatarDataBR(s.dataUltimoDia),
+            ]),
+            [
+              'Soma dos Saldos Bancários no Fim do Mês',
+              Number(saldosFimMes.reduce((acc, s) => acc + s.saldoFinal, 0).toFixed(2)),
+              '',
+            ],
+          ]
+        : []),
       [],
       ['DIVISÃO DE GASTOS POR RESPONSÁVEL', 'GASTO (R$)', '% DO TOTAL'],
       ...Object.entries(porPessoa).map(([nome, val]) => [
@@ -352,6 +371,37 @@ export function ExportadorRelatorio({
     )}</strong>
           </div>
         </div>
+
+        ${
+          saldosFimMes.length > 0
+            ? `<div class="box" style="margin-bottom: 18px; background: #f0fdf4; border-color: #bbf7d0;">
+                <h3 style="color: #065f46; border-bottom-color: #bbf7d0;">Saldo Real em Conta no Fim do Mês (Extratos Importados)</h3>
+                ${saldosFimMes
+                  .map(
+                    (s) => `
+                  <div class="row-item" style="border-bottom-color: #dcfce7;">
+                    <span><strong>${s.banco}</strong> (${s.responsavel}) — Último dia: ${formatarDataBR(
+                      s.dataUltimoDia
+                    )}</span>
+                    <strong class="${s.saldoFinal >= 0 ? 'verde' : 'vermelho'}">${formatarMoeda(
+                      s.saldoFinal
+                    )}</strong>
+                  </div>`
+                  )
+                  .join('')}
+                ${
+                  saldosFimMes.length > 1
+                    ? `<div class="row-item" style="border-bottom: none; padding-top: 8px;">
+                        <strong>Soma Total nos Bancos no Fim do Mês</strong>
+                        <strong class="verde">${formatarMoeda(
+                          saldosFimMes.reduce((acc, s) => acc + s.saldoFinal, 0)
+                        )}</strong>
+                      </div>`
+                    : ''
+                }
+              </div>`
+            : ''
+        }
 
         <div class="grid-2">
           <div class="box">

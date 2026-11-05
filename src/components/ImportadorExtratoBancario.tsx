@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 import * as pdfjsLib from 'pdfjs-dist';
 import {
@@ -13,7 +13,7 @@ import {
   AlertCircle,
   Check,
   FileText,
-  CopyCheck,
+  Landmark,
 } from 'lucide-react';
 import {
   type Transaction,
@@ -22,27 +22,31 @@ import {
   CATEGORIAS_DESPESA,
   CATEGORIAS_RECEITA,
   CATEGORIAS_POUPANCA,
+  CATEGORIAS_RESGATE_POUPANCA,
   CATEGORIAS_TRANSFERENCIA,
+  formatarMoeda,
   nomeMesAno,
-  sugerirCategoriaPorDescricao,
 } from '../types';
+import { supabase, supabaseConfigurado } from '../supabaseClient';
 
-// Configura o Worker do PDF.js via CDN para funcionar direto no Vite/Vercel sem erro de build
+// Configura o Worker do PDF.js via CDN para funcionar direto no Vite/Vercel
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
 
 interface ImportadorExtratoBancarioProps {
-  mesSelecionado: string; // Ex: "2026-09"
+  mesSelecionado: string; // Ex: "2026-10"
   pessoa1: string;
   pessoa2: string;
+  contaAtiva?: string; // Opcional: detecta automaticamente se não for passado
   transacoesExistentes?: Transaction[];
   onImportarLancamentos: (novos: Transaction[]) => Promise<void>;
+  onSaldosAtualizados?: () => void;
 }
 
 interface ItemPreview {
   idTemp: string;
   selecionado: boolean;
   data: string; // YYYY-MM-DD
-  horario?: string; // HH:MM
+  horario?: string;
   local: string;
   valor: number;
   sinalOriginal: 'entrada' | 'saida';
@@ -52,32 +56,71 @@ interface ItemPreview {
   metodoPagamento: PaymentMethod;
   origemArquivo: string;
   motivoAuto?: string;
-  duplicado?: boolean;
+  jaImportado?: boolean;
 }
 
-const MESES_ABREV: Record<string, string> = {
+export interface SaldoFinalBancoMes {
+  id: string;
+  conta_id: string;
+  mes: string;
+  banco: string;
+  dataUltimoDia: string; // YYYY-MM-DD
+  saldoFinal: number;
+  responsavel: string;
+}
+
+const MESES_PT: Record<string, string> = {
+  janeiro: '01',
   jan: '01',
+  fevereiro: '02',
   fev: '02',
+  marco: '03',
   mar: '03',
+  abril: '04',
   abr: '04',
+  maio: '05',
   mai: '05',
+  junho: '06',
   jun: '06',
+  julho: '07',
   jul: '07',
+  agosto: '08',
   ago: '08',
+  setembro: '09',
   set: '09',
+  outubro: '10',
   out: '10',
+  novembro: '11',
   nov: '11',
+  dezembro: '12',
   dez: '12',
 };
+
+const STORAGE_KEY_SALDOS_FIM_MES = 'financas_saldos_fim_mes_v2';
 
 export function ImportadorExtratoBancario({
   mesSelecionado,
   pessoa1,
   pessoa2,
+  contaAtiva,
   transacoesExistentes = [],
   onImportarLancamentos,
+  onSaldosAtualizados,
 }: ImportadorExtratoBancarioProps) {
   const [modalAberto, setModalAberto] = useState(false);
+
+  const normalizar = (str: string) =>
+    str
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim();
+
+  // Identifica a conta ativa ('casal' ou 'vitoria') sem exigir alteração no App.tsx
+  const contaIdAtual = useMemo(() => {
+    if (contaAtiva) return contaAtiva;
+    return normalizar(pessoa1).includes('vitoria') ? 'vitoria' : 'casal';
+  }, [contaAtiva, pessoa1]);
 
   // 1. CONFIGURAÇÕES ANTES DO UPLOAD
   const [responsavelPadrao, setResponsavelPadrao] = useState<string>(pessoa1);
@@ -92,40 +135,113 @@ export function ImportadorExtratoBancario({
   const [lendoArquivos, setLendoArquivos] = useState(false);
   const [salvando, setSalvando] = useState(false);
 
+  // 3. CONTROLE DE SALDO DO ÚLTIMO DIA REGISTRADO NO MÊS (SUPABASE + LOCALSTORAGE)
+  const [saldosDetectadosPreview, setSaldosDetectadosPreview] = useState<SaldoFinalBancoMes[]>([]);
+  const [saldosMesAtual, setSaldosMesAtual] = useState<SaldoFinalBancoMes[]>([]);
+
+  const carregarSaldosLocal = useCallback((): SaldoFinalBancoMes[] => {
+    try {
+      const raw = localStorage.getItem(`${STORAGE_KEY_SALDOS_FIM_MES}_${contaIdAtual}`);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  }, [contaIdAtual]);
+
+  const salvarSaldosLocal = useCallback(
+    (lista: SaldoFinalBancoMes[]) => {
+      try {
+        localStorage.setItem(
+          `${STORAGE_KEY_SALDOS_FIM_MES}_${contaIdAtual}`,
+          JSON.stringify(lista)
+        );
+      } catch {
+        // ignora erro de quota
+      }
+    },
+    [contaIdAtual]
+  );
+
+  // Busca os saldos de fim de mês no Supabase sempre que mudar o mês ou a conta
+  const carregarSaldosDoMes = useCallback(async () => {
+    const locais = carregarSaldosLocal().filter((s) => s.mes === mesSelecionado);
+    setSaldosMesAtual(locais);
+
+    if (!supabaseConfigurado || !supabase) return;
+
+    const { data, error } = await supabase
+      .from('saldos_fim_mes')
+      .select('*')
+      .eq('conta_id', contaIdAtual)
+      .eq('mes', mesSelecionado);
+
+    if (!error && data) {
+      const formatados: SaldoFinalBancoMes[] = data.map((row: any) => ({
+        id: String(row.id),
+        conta_id: String(row.conta_id),
+        mes: String(row.mes),
+        banco: String(row.banco),
+        responsavel: String(row.responsavel),
+        dataUltimoDia: String(row.data_ultimo_dia),
+        saldoFinal: Number(row.saldo_final),
+      }));
+      setSaldosMesAtual(formatados);
+
+      // Atualiza cache local mantendo outros meses
+      const outrosMeses = carregarSaldosLocal().filter((s) => s.mes !== mesSelecionado);
+      salvarSaldosLocal([...outrosMeses, ...formatados]);
+    }
+  }, [contaIdAtual, mesSelecionado, carregarSaldosLocal, salvarSaldosLocal]);
+
+  useEffect(() => {
+    carregarSaldosDoMes();
+  }, [carregarSaldosDoMes]);
+
+  const removerSaldoFimMes = async (idSaldo: string) => {
+    setSaldosMesAtual((prev) => prev.filter((s) => s.id !== idSaldo));
+    const atualizadosLocal = carregarSaldosLocal().filter((s) => s.id !== idSaldo);
+    salvarSaldosLocal(atualizadosLocal);
+
+    if (supabaseConfigurado && supabase) {
+      await supabase.from('saldos_fim_mes').delete().eq('id', idSaldo);
+    }
+    onSaldosAtualizados?.();
+  };
+
   const abrirModal = () => {
     setMesAlvo(mesSelecionado);
     setResponsavelPadrao(pessoa1);
     setModalAberto(true);
   };
 
-  const normalizar = (str: string) =>
-    str
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
+  // Limpa prefixos repetitivos do PDF do Banco Inter mantendo o nome do estabelecimento/pessoa claro
+  const limparDescricaoBancaria = (desc: string): string => {
+    const d = desc
+      .replace(/^Compra no debito:\s*"?No estabelecimento\s*/i, 'Compra Débito - ')
+      .replace(/^SAQUE BANCO 24H:\s*"?No estabelecimento\s*/i, 'Saque - ')
+      .replace(/^Pix (enviado|recebido):\s*"?Cp\s*:\s*\d+-/i, 'Pix $1 - ')
+      .replace(/^(Aplicacao|Resgate|Pagamento efetuado):\s*"?/i, '$1 - ')
+      .replace(/"/g, '')
       .trim();
-
-  const verificarDuplicataExistente = (data: string, valor: number, desc: string): boolean => {
-    const descNorm = normalizar(desc);
-    return transacoesExistentes.some((t) => {
-      if (t.data !== data) return false;
-      if (Math.abs(t.valor - valor) >= 0.01) return false;
-      const tNorm = normalizar(t.local);
-      return tNorm === descNorm || tNorm.includes(descNorm) || descNorm.includes(tNorm);
-    });
+    return d || desc.trim();
   };
 
-  // Classificador automático de categoria e método
+  // Classificador inteligente calibrado para Itaú e Banco Inter
   const classificarDescricao = (
     desc: string,
     sinal: 'entrada' | 'saida'
   ): { tipo: TransactionType; categoria: string; metodo: PaymentMethod; motivo?: string } => {
     const t = normalizar(desc);
 
+    const p1Norm = normalizar(pessoa1);
+    const p2Norm = normalizar(pessoa2);
+
+    // Inclui abreviações de 7 letras do Itaú (ex: "JUAN CE20/10" ou "Juan Ce09/10")
     const nomesProprios = [
-      normalizar(pessoa1),
-      normalizar(pessoa2),
+      p1Norm,
+      p2Norm,
       'juan cecilio',
+      'juan ce',
       'mesma titularidade',
       'entre contas',
       'transf entre contas',
@@ -148,6 +264,7 @@ export function ImportadorExtratoBancario({
       };
     }
 
+    // Aplicações e Resgates de CDB / Poupança (Banco Inter e Itaú)
     if (
       t.includes('aplicacao') ||
       t.includes('poupanca') ||
@@ -155,22 +272,158 @@ export function ImportadorExtratoBancario({
       t.includes('rdb') ||
       t.includes('cdb')
     ) {
-      if (sinal === 'saida') {
+      if (t.includes('rend pago') || t.includes('rendimento')) {
+        return { tipo: 'receita', categoria: 'Rendimentos', metodo: 'Pix/Débito' };
+      }
+      if (sinal === 'saida' && !t.includes('resgate')) {
         return {
           tipo: 'poupanca',
           categoria: 'Reserva do Casal',
           metodo: 'Pix/Débito',
-          motivo: 'Aplicação Poupança',
+          motivo: 'Aplicação CDB / Poupança',
+        };
+      }
+      if (sinal === 'entrada' || t.includes('resgate')) {
+        return {
+          tipo: 'resgate_poupanca',
+          categoria: CATEGORIAS_RESGATE_POUPANCA[0] || 'Resgate para Uso',
+          metodo: 'Pix/Débito',
+          motivo: 'Resgate CDB / Poupança',
         };
       }
     }
 
     if (sinal === 'entrada') {
-      const catReceita = sugerirCategoriaPorDescricao(desc, 'receita') || 'Reembolso/Pix';
-      return { tipo: 'receita', categoria: catReceita, metodo: 'Pix/Débito' };
+      if (t.includes('salario') || t.includes('remuneracao') || t.includes('pagamento')) {
+        return { tipo: 'receita', categoria: 'Salário', metodo: 'Pix/Débito' };
+      }
+      if (t.includes('rendimento') || t.includes('rend pago') || t.includes('dividendo')) {
+        return { tipo: 'receita', categoria: 'Rendimentos', metodo: 'Pix/Débito' };
+      }
+      return { tipo: 'receita', categoria: 'Reembolso/Pix', metodo: 'Pix/Débito' };
     }
 
-    const categoria = sugerirCategoriaPorDescricao(desc, 'despesa') || 'Outros';
+    let categoria = 'Outros';
+    if (
+      t.includes('uber') ||
+      t.includes('99') ||
+      t.includes('onibus') ||
+      t.includes('van') ||
+      t.includes('motta') ||
+      t.includes('fretamento') ||
+      t.includes('buson') ||
+      t.includes('viagens') ||
+      t.includes('pedagio') ||
+      t.includes('combustivel') ||
+      t.includes('posto') ||
+      t.includes('estacionamento') ||
+      t.includes('zona azul')
+    ) {
+      categoria = 'Transporte';
+    } else if (
+      t.includes('ifood') ||
+      t.includes('mercado') ||
+      t.includes('merca') ||
+      t.includes('supermercado') ||
+      t.includes('super ') ||
+      t.includes('padaria') ||
+      t.includes('lanche') ||
+      t.includes('restaurante') ||
+      t.includes('vale da costela') ||
+      t.includes('burger') ||
+      t.includes('mc donalds') ||
+      t.includes('mcdonalds') ||
+      t.includes('bk') ||
+      t.includes('sushi') ||
+      t.includes('hamasaki') ||
+      t.includes('marukai') ||
+      t.includes('esfiha') ||
+      t.includes('pizza') ||
+      t.includes('acai') ||
+      t.includes('sorvete') ||
+      t.includes('gelo') ||
+      t.includes('doceria') ||
+      t.includes('cafe') ||
+      t.includes('cafeteria') ||
+      t.includes('cantina') ||
+      t.includes('canti') ||
+      t.includes('ponto') ||
+      t.includes('jupir') ||
+      t.includes('atacadao') ||
+      t.includes('assai')
+    ) {
+      categoria = 'Comida';
+    } else if (
+      t.includes('faculdade') ||
+      t.includes('claro') ||
+      t.includes('vivo') ||
+      t.includes('tim') ||
+      t.includes('telefonica') ||
+      t.includes('impacto tel') ||
+      t.includes('internet') ||
+      t.includes('energia') ||
+      t.includes('elektro') ||
+      t.includes('sabesp') ||
+      t.includes('agua') ||
+      t.includes('aluguel') ||
+      t.includes('condominio') ||
+      t.includes('fatura') ||
+      t.includes('cartao') ||
+      t.includes('debito automatico') ||
+      t.includes('juros limite') ||
+      t.includes('iof')
+    ) {
+      categoria = 'Contas Fixas';
+    } else if (
+      t.includes('farmacia') ||
+      t.includes('drogaria') ||
+      t.includes('droga') ||
+      t.includes('frogway') ||
+      t.includes('medico') ||
+      t.includes('consulta') ||
+      t.includes('exame') ||
+      t.includes('dentista') ||
+      t.includes('psicolog') ||
+      t.includes('terapia') ||
+      t.includes('otica')
+    ) {
+      categoria = 'Saúde';
+    } else if (
+      t.includes('cinema') ||
+      t.includes('spotify') ||
+      t.includes('netflix') ||
+      t.includes('steam') ||
+      t.includes('nuuvem') ||
+      t.includes('playstation') ||
+      t.includes('jogo') ||
+      t.includes('ingresso') ||
+      t.includes('bar') ||
+      t.includes('festa') ||
+      t.includes('futebol')
+    ) {
+      categoria = 'Lazer';
+    } else if (
+      t.includes('shopee') ||
+      t.includes('amazon') ||
+      t.includes('mercado livre') ||
+      t.includes('mercadolivre') ||
+      t.includes('shein') ||
+      t.includes('magalu') ||
+      t.includes('mooz') ||
+      t.includes('pay2all') ||
+      t.includes('htn card') ||
+      t.includes('cea') ||
+      t.includes('renner') ||
+      t.includes('riachuelo') ||
+      t.includes('roupa') ||
+      t.includes('presente') ||
+      t.includes('barbeiro') ||
+      t.includes('cabeleireiro') ||
+      t.includes('salao')
+    ) {
+      categoria = 'Compras';
+    }
+
     const metodo: PaymentMethod =
       t.includes('credito') || t.includes('parc ') ? 'Cartão de Crédito' : metodoPadrao;
 
@@ -190,40 +443,59 @@ export function ImportadorExtratoBancario({
     for (let i = 0; i < resultado.length; i++) {
       const itemA = resultado[i];
       if (itemA.sinalOriginal !== 'saida') continue;
+      if (itemA.tipo === 'poupanca' || itemA.tipo === 'resgate_poupanca') continue;
 
       for (let j = 0; j < resultado.length; j++) {
         if (i === j) continue;
         const itemB = resultado[j];
         if (itemB.sinalOriginal !== 'entrada') continue;
+        if (itemB.tipo === 'poupanca' || itemB.tipo === 'resgate_poupanca') continue;
 
         const mesmoValor = Math.abs(itemA.valor - itemB.valor) < 0.005;
         if (!mesmoValor) continue;
 
         const diasDistancia = diffDias(itemA.data, itemB.data);
         if (diasDistancia <= 1) {
-          const msgHorario =
-            itemA.horario && itemB.horario && itemA.horario === itemB.horario
-              ? `Mesmo dia e horário (${itemA.horario})`
-              : 'Mesmo valor e data entre contas';
-
           resultado[i] = {
             ...itemA,
             tipo: 'transferencia_interna',
             categoria: 'Transferência entre Contas',
-            motivoAuto: `Movimentação detectada (${msgHorario})`,
+            motivoAuto: 'Par de transferência entre contas detectado',
           };
           resultado[j] = {
             ...itemB,
             tipo: 'transferencia_interna',
             categoria: 'Transferência entre Contas',
-            motivoAuto: `Movimentação detectada (${msgHorario})`,
+            motivoAuto: 'Par de transferência entre contas detectado',
           };
           break;
         }
       }
     }
 
-    return resultado;
+    // Verifica duplicatas já existentes no mês para desmarcar automaticamente
+    return resultado.map((item) => {
+      if (item.jaImportado !== undefined) return item;
+      const descItem = normalizar(item.local);
+      const duplicado = transacoesExistentes.some((t) => {
+        if (t.data !== item.data) return false;
+        if (Math.abs(t.valor - item.valor) >= 0.01) return false;
+        const descExistente = normalizar(t.local);
+        return (
+          descExistente === descItem ||
+          descExistente.includes(descItem) ||
+          descItem.includes(descExistente)
+        );
+      });
+      if (duplicado) {
+        return {
+          ...item,
+          selecionado: false,
+          jaImportado: true,
+        };
+      }
+      return { ...item, jaImportado: false };
+    });
   };
 
   const extrairDataISO = (textoData: any): { dataISO: string | null; horario?: string } => {
@@ -245,42 +517,49 @@ export function ImportadorExtratoBancario({
       }
     }
 
-    const str = String(textoData).trim();
+    const str = String(textoData).replace(/\u00a0/g, ' ').trim();
+    const norm = normalizar(str);
     const matchHora = str.match(/(\d{2}:\d{2})/);
     const horario = matchHora ? matchHora[1] : undefined;
 
-    // 1. DD/MM/YYYY
+    // 1. Padrão Banco Inter por extenso: "5 de Outubro de 2026" ou "31 de Outubro de 2026"
+    const mExtenso = norm.match(
+      /(?:^|\s|\D)(\d{1,2})\s+de\s+(janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s+de\s+(\d{4})/
+    );
+    if (mExtenso) {
+      const dia = mExtenso[1].padStart(2, '0');
+      const mes = MESES_PT[mExtenso[2]];
+      const ano = mExtenso[3];
+      return { dataISO: `${ano}-${mes}-${dia}`, horario };
+    }
+
+    // 2. DD/MM/YYYY (Padrão Itaú: ex "29/10/2026")
     const mBR = str.match(/(\d{2})\/(\d{2})\/(\d{4})/);
     if (mBR) {
       return { dataISO: `${mBR[3]}-${mBR[2]}-${mBR[1]}`, horario };
     }
 
-    // 2. YYYY-MM-DD
+    // 3. YYYY-MM-DD
     const mISO = str.match(/(\d{4})-(\d{2})-(\d{2})/);
     if (mISO) {
       return { dataISO: `${mISO[1]}-${mISO[2]}-${mISO[3]}`, horario };
     }
 
-    // 3. DD/MM/YY (Ex: 15/09/26)
+    // 4. DD/MM/YY
     const mCurtoAno = str.match(/(\d{2})\/(\d{2})\/(\d{2})(?!\d)/);
     if (mCurtoAno) {
       return { dataISO: `20${mCurtoAno[3]}-${mCurtoAno[2]}-${mCurtoAno[1]}`, horario };
     }
 
-    // 4. DD/MM (Padrão PDF Itaú: ex "15/09")
-    const mCurto = str.match(/(?:^|\s)(\d{2})\/(\d{2})(?!\/|\d)/);
-    if (mCurto) {
-      const anoAlvo = mesAlvo.split('-')[0];
-      return { dataISO: `${anoAlvo}-${mCurto[2]}-${mCurto[1]}`, horario };
-    }
-
-    // 5. DD/mmm ou DD mmm (Padrão PDF Itaú/Nubank: ex "15/set" ou "15 set")
-    const mMesTexto = normalizar(str).match(/(?:^|\s)(\d{2})\s*[/\s-]\s*(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)/);
+    // 5. DD/mmm
+    const mMesTexto = norm.match(
+      /(?:^|\s)(\d{1,2})\s*[/\s-]\s*(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)(?:\b|\s|$)/
+    );
     if (mMesTexto) {
       const anoAlvo = mesAlvo.split('-')[0];
-      const mesNum = MESES_ABREV[mMesTexto[2]];
+      const mesNum = MESES_PT[mMesTexto[2]];
       if (mesNum) {
-        return { dataISO: `${anoAlvo}-${mesNum}-${mMesTexto[1]}`, horario };
+        return { dataISO: `${anoAlvo}-${mesNum}-${mMesTexto[1].padStart(2, '0')}`, horario };
       }
     }
 
@@ -293,6 +572,7 @@ export function ImportadorExtratoBancario({
 
     let s = String(val)
       .replace(/R\$/gi, '')
+      .replace(/\u00a0/g, '')
       .replace(/\s/g, '')
       .trim();
     if (!s) return null;
@@ -317,7 +597,7 @@ export function ImportadorExtratoBancario({
   };
 
   // ============================================================================
-  // LEITOR ESPECIAL DE PDF (RECONSTRÓI AS LINHAS DO EXTRATO DO ITAÚ / NUBANK / INTER)
+  // LEITOR DE PDF (RECONSTRÓI CADA LINHA HORIZONTAL DO EXTRATO DO INTER E ITAÚ)
   // ============================================================================
   const extrairTextoDePDF = async (file: File): Promise<string> => {
     const arrayBuffer = await file.arrayBuffer();
@@ -331,7 +611,7 @@ export function ImportadorExtratoBancario({
       const gruposY: { y: number; itens: { x: number; str: string }[] }[] = [];
 
       for (const item of textContent.items as any[]) {
-        const texto = String(item.str || '').trim();
+        const texto = String(item.str || '').replace(/\u00a0/g, ' ').trim();
         if (!texto) continue;
         const x = item.transform[4];
         const y = item.transform[5];
@@ -357,68 +637,108 @@ export function ImportadorExtratoBancario({
   };
 
   // ============================================================================
-  // LEITOR DE LINHAS DE TEXTO / PDF
+  // PARSER CALIBRADO PARA BANCO INTER + ITAÚ (FILTRA SALDO DO DIA E PEGA O ÚLTIMO DO MÊS)
   // ============================================================================
   const lerTextoBrutoOuPDF = (
     texto: string,
     origemLabel: string
-  ): { validos: ItemPreview[]; ignorados: number } => {
+  ): {
+    validos: ItemPreview[];
+    ignorados: number;
+    ultimoSaldoMes: SaldoFinalBancoMes | null;
+  } => {
     const validos: ItemPreview[] = [];
     let ignorados = 0;
+
+    const textoNorm = normalizar(texto);
+    const nomeBanco = textoNorm.includes('banco inter')
+      ? 'Banco Inter'
+      : textoNorm.includes('itau')
+      ? 'Itaú'
+      : origemLabel.replace(/\.(pdf|csv|ofx|txt|xlsx)$/i, '');
+
+    const saldosDiariosDoMes: { data: string; saldo: number }[] = [];
+
+    // Regex que captura "-R$ 2,29", "R$ 195,45", "-12,80" sem roubar o "-" da coluna seguinte
+    const regexValores =
+      /[-+]?\s*(?:R\$\s*)?[-+]?\s*\d{1,3}(?:\.\d{3})*[.,]\d{2}(?:-(?!\s*(?:R\$|\d)))?/gi;
 
     const linhas = texto.split(/\r?\n/);
     let ultimaDataDetectada: string | null = null;
 
     for (let idx = 0; idx < linhas.length; idx++) {
-      const limpa = linhas[idx].trim();
+      const limpa = linhas[idx].replace(/\u00a0/g, ' ').trim();
       if (!limpa || limpa.length < 4) continue;
 
       const normLinha = normalizar(limpa);
 
+      // 1. Ignora cabeçalhos de emissão/período/rodapé para NUNCA sujar a data dos lançamentos
       if (
-        normLinha.startsWith('saldo') ||
-        normLinha.includes('saldo anterior') ||
-        normLinha.includes('saldo final') ||
-        normLinha.includes('saldo total disponivel') ||
-        normLinha.includes('s a l d o') ||
+        normLinha.includes('solicitado em') ||
+        normLinha.includes('periodo:') ||
+        normLinha.includes('periodo de visualizacao') ||
+        normLinha.includes('emitido em') ||
+        normLinha.includes('cpf/cnpj') ||
+        normLinha.includes('fale com a gente') ||
+        normLinha.includes('sac:') ||
+        normLinha.includes('ouvidoria:') ||
         normLinha.includes('limite da conta') ||
-        normLinha.includes('cnpj')
+        normLinha.includes('saldo total') ||
+        normLinha.includes('saldo disponivel') ||
+        normLinha.includes('saldo bloqueado') ||
+        normLinha.includes('saldo em conta')
       ) {
         continue;
       }
 
+      // 2. Verifica se a linha tem data explícita (DD/MM/YYYY do Itaú ou "5 de Outubro de 2026" do Inter)
       const { dataISO, horario } = extrairDataISO(limpa);
       if (dataISO) {
         ultimaDataDetectada = dataISO;
       }
 
+      // 3. Se for uma linha de SALDO DO DIA (Inter ou Itaú), NUNCA adiciona como entrada/saída!
+      if (
+        normLinha.includes('saldo do dia') ||
+        normLinha.includes('saldo anterior') ||
+        normLinha.includes('saldo final') ||
+        normLinha.includes('s a l d o')
+      ) {
+        const dataRefSaldo = dataISO || ultimaDataDetectada;
+        if (dataRefSaldo && dataRefSaldo.startsWith(mesAlvo) && normLinha.includes('saldo do dia')) {
+          const posSaldo = normLinha.indexOf('saldo do dia');
+          const trechoAposSaldo = limpa.slice(posSaldo);
+          const matchesSaldo = Array.from(trechoAposSaldo.matchAll(regexValores));
+          if (matchesSaldo.length > 0) {
+            const valorSaldo = extrairNumero(matchesSaldo[matchesSaldo.length - 1][0]);
+            if (valorSaldo !== null) {
+              saldosDiariosDoMes.push({ data: dataRefSaldo, saldo: valorSaldo });
+            }
+          }
+        }
+        continue;
+      }
+
       const dataUsada = dataISO || ultimaDataDetectada;
       if (!dataUsada) continue;
 
-      const regexValores =
-        /([-+]?\s*(?:R\$\s*)?\d{1,3}(?:\.\d{3})*,\d{2}\s*[-dDcC]?)/gi;
-      const matchesValores = Array.from(limpa.matchAll(regexValores));
+      let restoLinha = limpa;
+      const mDataInicio = restoLinha.match(/^(\d{2}\/\d{2}\/\d{2,4}|\d{4}-\d{2}-\d{2})\s+/);
+      if (mDataInicio) {
+        restoLinha = restoLinha.slice(mDataInicio[0].length).trim();
+      }
 
+      const matchesValores = Array.from(restoLinha.matchAll(regexValores));
       if (matchesValores.length === 0) continue;
 
-      const matchValorPrincipal = matchesValores[0][0];
-      let valorNum = extrairNumero(matchValorPrincipal);
+      const primeiroMatch = matchesValores[0];
+      let valorNum = extrairNumero(primeiroMatch[0]);
       if (valorNum === null || valorNum === 0) continue;
 
-      let desc = limpa;
-      if (dataISO) {
-        desc = desc
-          .replace(/(\d{2}\/\d{2}(?:\/\d{2,4})?|\d{4}-\d{2}-\d{2})/, '')
-          .replace(/\b(\d{2})\s*[/\s-]\s*(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\b/i, '');
-      }
-      matchesValores.forEach((m) => {
-        desc = desc.replace(m[0], '');
-      });
-
-      desc = desc
-        .replace(/\d{2}:\d{2}/g, '')
-        .replace(/^[;\t|\s-]+|[;\t|\s-]+$/g, '')
-        .trim();
+      const rawDesc = restoLinha.slice(0, primeiroMatch.index).trim();
+      const desc = limparDescricaoBancaria(
+        rawDesc.replace(/^[;\t|\s-]+|[;\t|\s-]+$/g, '').trim()
+      );
 
       if (!desc || desc.length < 2) continue;
 
@@ -430,44 +750,57 @@ export function ImportadorExtratoBancario({
       const descNorm = normalizar(desc);
       if (
         valorNum > 0 &&
-        (descNorm.includes('enviado') ||
+        (descNorm.includes('pix enviado') ||
           descNorm.includes('compra') ||
-          descNorm.includes('pagto') ||
-          descNorm.includes('sispag') ||
-          descNorm.includes('debito') ||
-          descNorm.includes('saque') ||
-          descNorm.includes('tar ')) &&
+          descNorm.includes('pagamento efetuado') ||
+          descNorm.includes('pag boleto') ||
+          descNorm.includes('fatura paga') ||
+          descNorm.includes('aplicacao') ||
+          descNorm.includes('saque')) &&
         !descNorm.includes('receb') &&
-        !descNorm.includes('devol') &&
+        !descNorm.includes('resgate') &&
         !descNorm.includes('estorno')
       ) {
         valorNum = -Math.abs(valorNum);
       }
 
       const sinal: 'entrada' | 'saida' = valorNum > 0 ? 'entrada' : 'saida';
-      const valorAbs = Math.abs(valorNum);
       const classif = classificarDescricao(desc, sinal);
-      const jaExiste = verificarDuplicataExistente(dataUsada, valorAbs, desc);
 
       validos.push({
         idTemp: `${Date.now()}-${origemLabel}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
-        selecionado: !jaExiste,
+        selecionado: true,
         data: dataUsada,
         horario,
         local: desc,
-        valor: valorAbs,
+        valor: Math.abs(valorNum),
         sinalOriginal: sinal,
         tipo: classif.tipo,
         categoria: classif.categoria,
         responsavel: responsavelPadrao,
         metodoPagamento: classif.metodo,
-        origemArquivo: origemLabel,
+        origemArquivo: nomeBanco,
         motivoAuto: classif.motivo,
-        duplicado: jaExiste,
       });
     }
 
-    return { validos, ignorados };
+    // Seleciona SOMENTE o saldo do último dia registrado no mês daquele banco
+    let ultimoSaldoMes: SaldoFinalBancoMes | null = null;
+    if (saldosDiariosDoMes.length > 0) {
+      saldosDiariosDoMes.sort((a, b) => a.data.localeCompare(b.data));
+      const ultimo = saldosDiariosDoMes[saldosDiariosDoMes.length - 1];
+      ultimoSaldoMes = {
+        id: `${contaIdAtual}-${mesAlvo}-${normalizar(nomeBanco)}-${normalizar(responsavelPadrao)}`,
+        conta_id: contaIdAtual,
+        mes: mesAlvo,
+        banco: nomeBanco,
+        dataUltimoDia: ultimo.data,
+        saldoFinal: ultimo.saldo,
+        responsavel: responsavelPadrao,
+      };
+    }
+
+    return { validos, ignorados, ultimoSaldoMes };
   };
 
   // ============================================================================
@@ -507,11 +840,10 @@ export function ImportadorExtratoBancario({
       const sinal: 'entrada' | 'saida' = valorBruto > 0 ? 'entrada' : 'saida';
       const valorAbs = Math.abs(valorBruto);
       const classif = classificarDescricao(desc, sinal);
-      const jaExiste = verificarDuplicataExistente(dataISO, valorAbs, desc);
 
       validos.push({
         idTemp: `${Date.now()}-${nomeArq}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
-        selecionado: !jaExiste,
+        selecionado: true,
         data: dataISO,
         horario,
         local: desc,
@@ -523,7 +855,6 @@ export function ImportadorExtratoBancario({
         metodoPagamento: classif.metodo,
         origemArquivo: nomeArq,
         motivoAuto: classif.motivo,
-        duplicado: jaExiste,
       });
     });
 
@@ -564,7 +895,6 @@ export function ImportadorExtratoBancario({
         }
 
         if (!dataEncontrada) return;
-
         if (!dataEncontrada.startsWith(mesAlvo)) {
           ignorados++;
           return;
@@ -583,7 +913,7 @@ export function ImportadorExtratoBancario({
 
           const pareceMonetario =
             typeof valCelula === 'number' ||
-            /^[-+]?\s*(R\$)?\s*\d{1,3}(\.\d{3})*([.,]\d{2})?[-dDcC]?$/.test(strCelula);
+            /^[-+]?\s*(R\$)?\s*[-+]?\s*\d{1,3}(\.\d{3})*([.,]\d{2})?[-dDcC]?$/.test(strCelula);
 
           if (num !== null && num !== 0 && pareceMonetario && valorEncontrado === null) {
             valorEncontrado = num;
@@ -595,16 +925,15 @@ export function ImportadorExtratoBancario({
         if (valorEncontrado === null || valorEncontrado === 0) return;
 
         const descFinal = textosDescricao.join(' - ').trim() || 'Lançamento Extrato';
-        if (/^saldo\s*(anterior|do dia|final|total)/i.test(normalizar(descFinal))) return;
+        if (normalizar(descFinal).includes('saldo do dia')) return;
 
         const sinal: 'entrada' | 'saida' = valorEncontrado > 0 ? 'entrada' : 'saida';
         const valorAbs = Math.abs(valorEncontrado);
         const classif = classificarDescricao(descFinal, sinal);
-        const jaExiste = verificarDuplicataExistente(dataEncontrada, valorAbs, descFinal);
 
         validos.push({
           idTemp: `${Date.now()}-${nomeArq}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
-          selecionado: !jaExiste,
+          selecionado: true,
           data: dataEncontrada,
           horario: horarioEncontrado,
           local: descFinal,
@@ -616,7 +945,6 @@ export function ImportadorExtratoBancario({
           metodoPagamento: classif.metodo,
           origemArquivo: nomeArq,
           motivoAuto: classif.motivo,
-          duplicado: jaExiste,
         });
       });
     });
@@ -625,7 +953,7 @@ export function ImportadorExtratoBancario({
   };
 
   // ============================================================================
-  // PROCESSAMENTO DE MÚLTIPLOS ARQUIVOS JUNTOS
+  // UPLOAD DE ARQUIVOS (.PDF DO INTER E ITAÚ, .OFX, .CSV, .XLSX)
   // ============================================================================
   const handleUploadArquivos = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -634,6 +962,7 @@ export function ImportadorExtratoBancario({
     setLendoArquivos(true);
     const novosExtraidos: ItemPreview[] = [];
     let totalForaDoMes = 0;
+    const novosSaldosFimMes: SaldoFinalBancoMes[] = [];
 
     try {
       for (const file of Array.from(files)) {
@@ -641,9 +970,10 @@ export function ImportadorExtratoBancario({
 
         if (nomeLower.endsWith('.pdf')) {
           const textoPDF = await extrairTextoDePDF(file);
-          const { validos, ignorados } = lerTextoBrutoOuPDF(textoPDF, file.name);
+          const { validos, ignorados, ultimoSaldoMes } = lerTextoBrutoOuPDF(textoPDF, file.name);
           novosExtraidos.push(...validos);
           totalForaDoMes += ignorados;
+          if (ultimoSaldoMes) novosSaldosFimMes.push(ultimoSaldoMes);
         } else if (nomeLower.endsWith('.ofx') || nomeLower.endsWith('.ofc')) {
           const texto = await file.text();
           const { validos, ignorados } = lerConteudoOFX(texto, file.name);
@@ -651,9 +981,10 @@ export function ImportadorExtratoBancario({
           totalForaDoMes += ignorados;
         } else if (nomeLower.endsWith('.txt')) {
           const texto = await file.text();
-          const { validos, ignorados } = lerTextoBrutoOuPDF(texto, file.name);
+          const { validos, ignorados, ultimoSaldoMes } = lerTextoBrutoOuPDF(texto, file.name);
           novosExtraidos.push(...validos);
           totalForaDoMes += ignorados;
+          if (ultimoSaldoMes) novosSaldosFimMes.push(ultimoSaldoMes);
         } else {
           const buffer = await file.arrayBuffer();
           const { validos, ignorados } = lerPlanilhaOuCSV(buffer, file.name);
@@ -663,6 +994,14 @@ export function ImportadorExtratoBancario({
       }
 
       setIgnoradosOutroMes((prev) => prev + totalForaDoMes);
+
+      if (novosSaldosFimMes.length > 0) {
+        setSaldosDetectadosPreview((prev) => {
+          const mapa = new Map<string, SaldoFinalBancoMes>();
+          [...prev, ...novosSaldosFimMes].forEach((s) => mapa.set(s.id, s));
+          return Array.from(mapa.values());
+        });
+      }
 
       setItensPreview((prev) => {
         const combinados = [...prev, ...novosExtraidos];
@@ -679,8 +1018,15 @@ export function ImportadorExtratoBancario({
 
   const handleProcessarTextoColado = () => {
     if (!textoColado.trim()) return;
-    const { validos, ignorados } = lerTextoBrutoOuPDF(textoColado, 'Texto Colado');
+    const { validos, ignorados, ultimoSaldoMes } = lerTextoBrutoOuPDF(textoColado, 'Texto Colado');
     setIgnoradosOutroMes((prev) => prev + ignorados);
+    if (ultimoSaldoMes) {
+      setSaldosDetectadosPreview((prev) => {
+        const mapa = new Map<string, SaldoFinalBancoMes>();
+        [...prev, ultimoSaldoMes].forEach((s) => mapa.set(s.id, s));
+        return Array.from(mapa.values());
+      });
+    }
     setItensPreview((prev) => cruzarTransferenciasInternas([...prev, ...validos]));
     setTextoColado('');
   };
@@ -695,9 +1041,10 @@ export function ImportadorExtratoBancario({
     setItensPreview((prev) => prev.filter((item) => item.idTemp !== idTemp));
   };
 
-  const alternarTodosPreview = () => {
-    const todosMarcados = itensPreview.every((i) => i.selecionado);
-    setItensPreview((prev) => prev.map((i) => ({ ...i, selecionado: !todosMarcados })));
+  const atualizarSaldoPreview = (idSaldo: string, novoValor: number) => {
+    setSaldosDetectadosPreview((prev) =>
+      prev.map((s) => (s.id === idSaldo ? { ...s, saldoFinal: novoValor } : s))
+    );
   };
 
   const resumoPreview = useMemo(() => {
@@ -705,44 +1052,125 @@ export function ImportadorExtratoBancario({
     const qtdDespesas = selecionados.filter((i) => i.tipo === 'despesa').length;
     const qtdReceitas = selecionados.filter((i) => i.tipo === 'receita').length;
     const qtdTransferencias = selecionados.filter((i) => i.tipo === 'transferencia_interna').length;
-    const qtdDuplicados = itensPreview.filter((i) => i.duplicado).length;
-    return { total: selecionados.length, qtdDespesas, qtdReceitas, qtdTransferencias, qtdDuplicados };
+    const qtdPoupanca = selecionados.filter(
+      (i) => i.tipo === 'poupanca' || i.tipo === 'resgate_poupanca'
+    ).length;
+    return { total: selecionados.length, qtdDespesas, qtdReceitas, qtdTransferencias, qtdPoupanca };
   }, [itensPreview]);
 
   const handleConfirmarImportacao = async () => {
     const selecionados = itensPreview.filter((i) => i.selecionado);
-    if (selecionados.length === 0) return;
+    if (selecionados.length === 0 && saldosDetectadosPreview.length === 0) return;
 
     setSalvando(true);
-    const transacoesFinais: Transaction[] = selecionados.map((item, idx) => ({
-      id: `extrato-${item.data}-${idx}-${Math.random().toString(36).slice(2, 7)}`,
-      tipo: item.tipo,
-      valor: item.valor,
-      data: item.data,
-      local: item.local.trim() || 'Lançamento Bancário',
-      categoria: item.categoria,
-      tags: item.motivoAuto ? ['#MovimentaçãoInterna'] : ['#ExtratoBancário'],
-      metodoPagamento: item.metodoPagamento,
-      responsavel: item.responsavel,
-      pendenteSync: false,
-    }));
 
-    await onImportarLancamentos(transacoesFinais);
+    // 1. Salva o controle de saldo do último dia registrado no mês no Supabase + LocalStorage
+    if (saldosDetectadosPreview.length > 0) {
+      const todosLocais = carregarSaldosLocal();
+      const mapaLocal = new Map<string, SaldoFinalBancoMes>();
+      todosLocais.forEach((s) => mapaLocal.set(s.id, s));
+      saldosDetectadosPreview.forEach((s) => mapaLocal.set(s.id, s));
+
+      const listaAtualizada = Array.from(mapaLocal.values());
+      salvarSaldosLocal(listaAtualizada);
+
+      if (mesAlvo === mesSelecionado) {
+        setSaldosMesAtual(listaAtualizada.filter((s) => s.mes === mesSelecionado));
+      }
+
+      if (supabaseConfigurado && supabase) {
+        const payloadSupabase = saldosDetectadosPreview.map((s) => ({
+          id: s.id,
+          conta_id: s.conta_id,
+          mes: s.mes,
+          banco: s.banco,
+          responsavel: s.responsavel,
+          data_ultimo_dia: s.dataUltimoDia,
+          saldo_final: s.saldoFinal,
+          updated_at: new Date().toISOString(),
+        }));
+        await supabase.from('saldos_fim_mes').upsert(payloadSupabase);
+      }
+      onSaldosAtualizados?.();
+    }
+
+    // 2. Salva as transações (entradas, saídas, poupança e movimentações)
+    if (selecionados.length > 0) {
+      const transacoesFinais: Transaction[] = selecionados.map((item, idx) => ({
+        id:
+          typeof crypto !== 'undefined' && crypto.randomUUID
+            ? crypto.randomUUID()
+            : `extrato-${item.data}-${idx}-${Math.random().toString(36).slice(2, 7)}`,
+        tipo: item.tipo,
+        valor: item.valor,
+        data: item.data,
+        local: item.local.trim() || 'Lançamento Bancário',
+        categoria: item.categoria,
+        tags: item.motivoAuto ? ['#MovimentaçãoInterna'] : [`#${item.origemArquivo}`],
+        metodoPagamento: item.metodoPagamento,
+        responsavel: item.responsavel,
+        pendenteSync: false,
+      }));
+
+      await onImportarLancamentos(transacoesFinais);
+    }
+
     setSalvando(false);
     setItensPreview([]);
+    setSaldosDetectadosPreview([]);
     setIgnoradosOutroMes(0);
     setModalAberto(false);
   };
 
+  const somaSaldosFimMesAtual = saldosMesAtual.reduce((acc, s) => acc + s.saldoFinal, 0);
+
   return (
-    <>
+    <div className="flex flex-wrap items-center gap-2">
       <button
         onClick={abrirModal}
         className="inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 px-3.5 py-2 rounded-xl text-xs font-bold cursor-pointer transition shadow-lg shadow-emerald-500/15"
       >
         <Upload size={15} strokeWidth={2.5} />
-        <span>Importar Extratos (PDF / CSV / OFX)</span>
+        <span>Importar Extratos (Inter / Itaú PDF)</span>
       </button>
+
+      {/* BADGE SINCRONIZADO COM SUPABASE DO QUE SOBROU NA CONTA NO FIM DO MÊS */}
+      {saldosMesAtual.length > 0 && (
+        <div className="inline-flex flex-wrap items-center gap-2 bg-zinc-900/90 border border-zinc-800 px-3 py-1.5 rounded-xl text-[11px] text-zinc-300">
+          <Landmark size={13} className="text-emerald-400 shrink-0" />
+          <span className="text-zinc-400 font-medium">Sobrou no fim do mês:</span>
+          {saldosMesAtual.map((s) => (
+            <span
+              key={s.id}
+              className="inline-flex items-center gap-1.5 bg-zinc-950 border border-zinc-800 px-2 py-0.5 rounded-lg font-semibold"
+              title={`Último dia registrado em ${s.banco} (${s.responsavel}): ${s.dataUltimoDia.split('-').reverse().join('/')}`}
+            >
+              <span>
+                {s.banco} ({s.dataUltimoDia.slice(8, 10)}/{s.dataUltimoDia.slice(5, 7)}):
+              </span>
+              <strong className={s.saldoFinal >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                {formatarMoeda(s.saldoFinal)}
+              </strong>
+              <button
+                type="button"
+                onClick={() => removerSaldoFimMes(s.id)}
+                className="text-zinc-500 hover:text-rose-400 ml-0.5 cursor-pointer"
+                title="Remover registro de saldo"
+              >
+                <X size={11} />
+              </button>
+            </span>
+          ))}
+          {saldosMesAtual.length > 1 && (
+            <span className="text-zinc-400 pl-1 border-l border-zinc-800">
+              Total:{' '}
+              <strong className={somaSaldosFimMesAtual >= 0 ? 'text-white' : 'text-rose-400'}>
+                {formatarMoeda(somaSaldosFimMesAtual)}
+              </strong>
+            </span>
+          )}
+        </div>
+      )}
 
       {modalAberto && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
@@ -752,10 +1180,10 @@ export function ImportadorExtratoBancario({
               <div>
                 <h3 className="font-bold text-base md:text-lg text-white flex items-center gap-2">
                   <Sparkles size={18} className="text-emerald-400" />
-                  Importador Inteligente de Extratos (PDF, OFX, CSV)
+                  Importador Calibrado (Banco Inter & Itaú PDF / OFX / CSV)
                 </h3>
                 <p className="text-xs text-zinc-400">
-                  Suporta PDF direto do Itaú/Nubank/Inter, evita duplicatas e detecta transferências entre contas
+                  Ignora saldos diários nas transações e sincroniza no Supabase o saldo do último dia do mês
                 </p>
               </div>
               <button
@@ -768,7 +1196,7 @@ export function ImportadorExtratoBancario({
 
             {/* CORPO ROLÁVEL */}
             <div className="space-y-5 overflow-y-auto pr-1 flex-1">
-              {/* PASSO 1: SELECIONAR QUEM ESTÁ SUBINDO + QUAL O MÊS ALVO */}
+              {/* PASSO 1: CONFIGURAÇÕES */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 bg-zinc-950/80 border border-zinc-800 p-4 rounded-2xl">
                 <div>
                   <label className="text-xs text-zinc-400 font-semibold block mb-1.5">
@@ -824,7 +1252,7 @@ export function ImportadorExtratoBancario({
                 </div>
               </div>
 
-              {/* PASSO 2: ENVIAR ARQUIVOS (.PDF, .CSV, .OFX) OU COLAR TEXTO */}
+              {/* PASSO 2: UPLOAD DE ARQUIVOS */}
               <div className="space-y-3">
                 <div className="flex gap-2">
                   <button
@@ -836,7 +1264,7 @@ export function ImportadorExtratoBancario({
                         : 'text-zinc-400 hover:text-zinc-200'
                     }`}
                   >
-                    Subir Arquivos (.PDF, .OFX, .CSV, .XLSX)
+                    Subir Arquivos (.PDF, .OFX, .CSV)
                   </button>
                   <button
                     type="button"
@@ -847,7 +1275,7 @@ export function ImportadorExtratoBancario({
                         : 'text-zinc-400 hover:text-zinc-200'
                     }`}
                   >
-                    Colar Texto Copiado do PDF / App
+                    Colar Texto Copiado do PDF
                   </button>
                 </div>
 
@@ -856,13 +1284,11 @@ export function ImportadorExtratoBancario({
                     <FileText size={28} className="text-emerald-400 mb-2" />
                     <p className="text-xs md:text-sm font-bold text-zinc-200">
                       {lendoArquivos
-                        ? 'Lendo páginas do PDF e cruzando dados...'
-                        : 'Clique para enviar o PDF do Itaú ou extratos de outros bancos'}
+                        ? 'Lendo PDFs do Inter / Itaú e cruzando transferências...'
+                        : 'Clique para selecionar os PDFs do Banco Inter e do Itaú juntos'}
                     </p>
                     <p className="text-[11px] text-zinc-400 mt-1">
-                      Aceita <strong>.PDF</strong>, <strong>.OFX</strong>, <strong>.CSV</strong> e <strong>.XLSX</strong>. Filtra apenas{' '}
-                      <strong className="text-emerald-400">{nomeMesAno(mesAlvo)}</strong> para{' '}
-                      <strong className="text-emerald-400">{responsavelPadrao}</strong>!
+                      Filtra apenas <strong className="text-emerald-400">{nomeMesAno(mesAlvo)}</strong> e salva o saldo do último dia no Supabase!
                     </p>
                     <input
                       type="file"
@@ -877,7 +1303,7 @@ export function ImportadorExtratoBancario({
                   <div className="space-y-2">
                     <textarea
                       rows={4}
-                      placeholder="Cole aqui as linhas copiadas do PDF do Itaú, Nubank ou Inter..."
+                      placeholder="Cole aqui o texto copiado do PDF do Banco Inter ou Itaú..."
                       value={textoColado}
                       onChange={(e) => setTextoColado(e.target.value)}
                       className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-emerald-500"
@@ -887,45 +1313,81 @@ export function ImportadorExtratoBancario({
                       onClick={handleProcessarTextoColado}
                       className="bg-zinc-800 hover:bg-zinc-700 text-emerald-400 font-bold px-4 py-2 rounded-xl text-xs transition cursor-pointer"
                     >
-                      Ler Linhas do Texto para {responsavelPadrao}
+                      Processar Texto
                     </button>
                   </div>
                 )}
               </div>
 
-              {(ignoradosOutroMes > 0 || resumoPreview.qtdDuplicados > 0) && (
-                <div className="flex flex-col sm:flex-row gap-2">
-                  {ignoradosOutroMes > 0 && (
-                    <div className="flex-1 bg-sky-500/10 border border-sky-500/30 rounded-xl px-3.5 py-2 text-xs text-sky-300 flex items-center gap-2">
-                      <AlertCircle size={15} className="shrink-0 text-sky-400" />
-                      <span>
-                        <strong>{ignoradosOutroMes} lançamento(s)</strong> de outros meses foram ignorados.
-                      </span>
-                    </div>
-                  )}
-                  {resumoPreview.qtdDuplicados > 0 && (
-                    <div className="flex-1 bg-amber-500/10 border border-amber-500/30 rounded-xl px-3.5 py-2 text-xs text-amber-300 flex items-center gap-2">
-                      <CopyCheck size={15} className="shrink-0 text-amber-400" />
-                      <span>
-                        <strong>{resumoPreview.qtdDuplicados} lançamento(s)</strong> já existentes no mês foram desmarcados automaticamente.
-                      </span>
-                    </div>
-                  )}
+              {/* CARD EDITÁVEL DE CONTROLE DO SALDO DO ÚLTIMO DIA REGISTRADO NO MÊS */}
+              {saldosDetectadosPreview.length > 0 && (
+                <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-3.5 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+                      <Landmark size={15} />
+                      Controle de Fim de Mês — Saldo do Último Dia Registrado (Sincronizado no Supabase, fora de entradas/saídas)
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {saldosDetectadosPreview.map((s) => (
+                      <div
+                        key={s.id}
+                        className="bg-zinc-950/90 border border-zinc-800 rounded-xl px-3 py-2 flex items-center justify-between gap-2"
+                      >
+                        <div>
+                          <p className="text-xs font-bold text-white">
+                            {s.banco} <span className="text-zinc-400 font-normal">({s.responsavel})</span>
+                          </p>
+                          <p className="text-[10px] text-zinc-400">
+                            Último dia: {s.dataUltimoDia.split('-').reverse().join('/')}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs text-zinc-400">R$</span>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={s.saldoFinal}
+                            onChange={(e) =>
+                              atualizarSaldoPreview(s.id, parseFloat(e.target.value) || 0)
+                            }
+                            className={`w-24 bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1 text-xs font-extrabold text-right focus:outline-none focus:border-emerald-500 ${
+                              s.saldoFinal >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                            }`}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 
-              {/* PASSO 3: TABELA DE REVISÃO E EDIÇÃO RÁPIDA ANTES DE SALVAR */}
+              {ignoradosOutroMes > 0 && (
+                <div className="bg-sky-500/10 border border-sky-500/30 rounded-xl px-3.5 py-2 text-xs text-sky-300 flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    <AlertCircle size={15} className="shrink-0 text-sky-400" />
+                    Filtro de Mês: <strong>{ignoradosOutroMes} lançamento(s)</strong> de outros meses foram descartados automaticamente.
+                  </span>
+                </div>
+              )}
+
+              {/* PASSO 3: TABELA DE REVISÃO */}
               {itensPreview.length > 0 && (
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 flex-wrap">
+                    <div className="flex flex-wrap items-center gap-2">
                       <h4 className="text-xs md:text-sm font-bold text-white">
-                        Revisão dos Lançamentos ({resumoPreview.total} de {itensPreview.length} selecionados)
+                        Lançamentos do Mês ({resumoPreview.total} de {itensPreview.length} selecionados)
                       </h4>
                       {resumoPreview.qtdTransferencias > 0 && (
                         <span className="text-[11px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full flex items-center gap-1 font-semibold">
                           <ArrowLeftRight size={12} />
-                          {resumoPreview.qtdTransferencias} movimentação(ões) entre contas
+                          {resumoPreview.qtdTransferencias} movimentação(ões) interna(s)
+                        </span>
+                      )}
+                      {itensPreview.some((i) => i.jaImportado) && (
+                        <span className="text-[11px] bg-zinc-800 text-zinc-300 border border-zinc-700 px-2 py-0.5 rounded-full font-medium">
+                          {itensPreview.filter((i) => i.jaImportado).length} já importado(s) desmarcado(s)
                         </span>
                       )}
                     </div>
@@ -933,15 +1395,24 @@ export function ImportadorExtratoBancario({
                     <div className="flex items-center gap-3">
                       <button
                         type="button"
-                        onClick={alternarTodosPreview}
-                        className="text-xs text-emerald-400 hover:underline cursor-pointer font-semibold"
+                        onClick={() => {
+                          const todosMarcados = itensPreview.every((i) => i.selecionado);
+                          setItensPreview((prev) =>
+                            prev.map((i) => ({ ...i, selecionado: !todosMarcados }))
+                          );
+                        }}
+                        className="text-xs font-semibold text-emerald-400 hover:underline cursor-pointer"
                       >
-                        {itensPreview.every((i) => i.selecionado) ? 'Desmarcar todos' : 'Marcar todos'}
+                        {itensPreview.every((i) => i.selecionado)
+                          ? 'Desmarcar todos'
+                          : 'Marcar todos'}
                       </button>
+
                       <button
                         type="button"
                         onClick={() => {
                           setItensPreview([]);
+                          setSaldosDetectadosPreview([]);
                           setIgnoradosOutroMes(0);
                         }}
                         className="text-xs text-rose-400 hover:underline cursor-pointer"
@@ -951,13 +1422,13 @@ export function ImportadorExtratoBancario({
                     </div>
                   </div>
 
-                  <div className="space-y-2 max-h-[340px] overflow-y-auto pr-1">
+                  <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
                     {itensPreview.map((item) => (
                       <div
                         key={item.idTemp}
                         className={`border rounded-xl p-3 flex flex-col md:flex-row md:items-center justify-between gap-2.5 transition ${
                           !item.selecionado
-                            ? 'bg-zinc-950/40 border-zinc-800/40 opacity-55'
+                            ? 'bg-zinc-950/40 border-zinc-800/40 opacity-50'
                             : item.tipo === 'transferencia_interna'
                             ? 'bg-zinc-950/90 border-amber-500/40'
                             : 'bg-zinc-950/90 border-zinc-800'
@@ -991,21 +1462,18 @@ export function ImportadorExtratoBancario({
                               onChange={(e) =>
                                 atualizarItemPreview(item.idTemp, { local: e.target.value })
                               }
-                              placeholder="Descrição / Nome do gasto"
                               className="w-full bg-zinc-900 border border-zinc-800 focus:border-emerald-500 rounded-lg px-2.5 py-1 text-xs font-semibold text-white focus:outline-none"
                             />
-                            <div className="flex items-center gap-2 flex-wrap">
-                              {item.duplicado && (
-                                <span className="text-[10px] text-amber-300 flex items-center gap-1 mt-0.5">
-                                  <CopyCheck size={10} /> Já consta no extrato deste mês
-                                </span>
-                              )}
-                              {item.motivoAuto && (
-                                <span className="text-[10px] text-amber-400 flex items-center gap-1 mt-0.5">
-                                  <ArrowLeftRight size={10} /> {item.motivoAuto} (Não altera saldo)
-                                </span>
-                              )}
-                            </div>
+                            {item.motivoAuto && (
+                              <span className="text-[10px] text-amber-400 flex items-center gap-1 mt-0.5">
+                                <ArrowLeftRight size={10} /> {item.motivoAuto} ({item.origemArquivo})
+                              </span>
+                            )}
+                            {item.jaImportado && (
+                              <span className="text-[10px] text-sky-400 font-medium block mt-0.5">
+                                Possível duplicata já cadastrada neste mês (desmarcado)
+                              </span>
+                            )}
                           </div>
                         </div>
 
@@ -1021,6 +1489,8 @@ export function ImportadorExtratoBancario({
                                   ? CATEGORIAS_RECEITA[0]
                                   : novoTipo === 'poupanca'
                                   ? CATEGORIAS_POUPANCA[0]
+                                  : novoTipo === 'resgate_poupanca'
+                                  ? CATEGORIAS_RESGATE_POUPANCA[0]
                                   : CATEGORIAS_DESPESA[0];
                               atualizarItemPreview(item.idTemp, {
                                 tipo: novoTipo,
@@ -1047,7 +1517,10 @@ export function ImportadorExtratoBancario({
                               Movimentação (⇄)
                             </option>
                             <option value="poupanca" className="bg-zinc-900 text-white">
-                              Poupança
+                              Guardei Poupança
+                            </option>
+                            <option value="resgate_poupanca" className="bg-zinc-900 text-white">
+                              Resgate CDB/Poup.
                             </option>
                           </select>
 
@@ -1064,6 +1537,8 @@ export function ImportadorExtratoBancario({
                               ? CATEGORIAS_RECEITA
                               : item.tipo === 'poupanca'
                               ? CATEGORIAS_POUPANCA
+                              : item.tipo === 'resgate_poupanca'
+                              ? CATEGORIAS_RESGATE_POUPANCA
                               : CATEGORIAS_TRANSFERENCIA
                             ).map((cat) => (
                               <option key={cat} value={cat}>
@@ -1087,19 +1562,18 @@ export function ImportadorExtratoBancario({
                           </select>
 
                           <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1">
-                            <span className="text-[10px] text-zinc-400">R$</span>
+                            <span className="text-[10px] text-zinc-400 font-semibold">R$</span>
                             <input
                               type="number"
                               step="0.01"
                               min="0"
                               value={item.valor}
-                              onChange={(e) => {
-                                const val = parseFloat(e.target.value);
-                                if (!isNaN(val) && val >= 0) {
-                                  atualizarItemPreview(item.idTemp, { valor: val });
-                                }
-                              }}
-                              className="w-16 text-xs font-extrabold text-white text-right bg-transparent focus:outline-none"
+                              onChange={(e) =>
+                                atualizarItemPreview(item.idTemp, {
+                                  valor: Math.max(0, parseFloat(e.target.value) || 0),
+                                })
+                              }
+                              className="w-[72px] bg-transparent text-xs font-extrabold text-white text-right focus:outline-none"
                             />
                           </div>
 
@@ -1123,8 +1597,8 @@ export function ImportadorExtratoBancario({
             <div className="flex items-center justify-between pt-3 border-t border-zinc-800 shrink-0">
               <span className="text-xs text-zinc-400">
                 {resumoPreview.total > 0
-                  ? `${resumoPreview.qtdDespesas} gasto(s), ${resumoPreview.qtdReceitas} entrada(s) e ${resumoPreview.qtdTransferencias} movimentação(ões)`
-                  : 'Suba seus arquivos acima para revisar'}
+                  ? `${resumoPreview.qtdDespesas} gasto(s), ${resumoPreview.qtdReceitas} entrada(s), ${resumoPreview.qtdPoupanca} poupança/CDB e ${resumoPreview.qtdTransferencias} movimentação(ões)`
+                  : 'Suba os PDFs do Inter e Itaú acima'}
               </span>
 
               <div className="flex items-center gap-2">
@@ -1137,7 +1611,9 @@ export function ImportadorExtratoBancario({
                 </button>
                 <button
                   type="button"
-                  disabled={resumoPreview.total === 0 || salvando}
+                  disabled={
+                    (resumoPreview.total === 0 && saldosDetectadosPreview.length === 0) || salvando
+                  }
                   onClick={handleConfirmarImportacao}
                   className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 text-zinc-950 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
                 >
@@ -1151,6 +1627,6 @@ export function ImportadorExtratoBancario({
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }

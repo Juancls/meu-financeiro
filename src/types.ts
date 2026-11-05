@@ -93,6 +93,8 @@ export const CATEGORIAS_RESGATE = [
   'Outros',
 ];
 
+export const CATEGORIAS_RESGATE_POUPANCA = CATEGORIAS_RESGATE;
+
 export const CATEGORIAS_TRANSFERENCIA = [
   'Transferência entre Contas',
   'Movimentação Interna',

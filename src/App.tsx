@@ -27,6 +27,7 @@ import {
   Repeat,
   Sun,
   Moon,
+  Landmark,
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
 import {
@@ -56,7 +57,10 @@ import { AbaEnxoval } from './components/AbaEnxoval';
 import { AbaObservacoes } from './components/AbaObservacoes';
 import { AbaAnalise } from './components/AbaAnalise';
 import { ExportadorRelatorio } from './components/ExportadorRelatorio';
-import { ImportadorExtratoBancario } from './components/ImportadorExtratoBancario';
+import {
+  ImportadorExtratoBancario,
+  type SaldoFinalBancoMes,
+} from './components/ImportadorExtratoBancario';
 import { TelaLogin } from './components/TelaLogin';
 
 const TODAS_CATEGORIAS = Array.from(
@@ -113,6 +117,7 @@ export default function App() {
   const [transacoes, setTransacoes] = useState<Transaction[]>([]);
   const [itensEnxoval, setItensEnxoval] = useState<EnxovalItem[]>([]);
   const [observacoesMes, setObservacoesMes] = useState<ObservacaoMes[]>([]);
+  const [saldosFimMes, setSaldosFimMes] = useState<SaldoFinalBancoMes[]>([]);
   const [metaPoupanca, setMetaPoupanca] = useState<number>(10000);
   const [orcamentos, setOrcamentos] = useState<CategoryBudget[]>(ORCAMENTOS_INICIAIS);
 
@@ -157,6 +162,9 @@ export default function App() {
 
       const orcSalvos = localStorage.getItem(`${prefixoStorage}:orcamentos`);
       setOrcamentos(orcSalvos ? JSON.parse(orcSalvos) : ORCAMENTOS_INICIAIS);
+
+      const saldosSalvos = localStorage.getItem(`financas_saldos_fim_mes_v2_${contaAtiva}`);
+      setSaldosFimMes(saldosSalvos ? JSON.parse(saldosSalvos) : []);
     } catch {
       setTransacoes([]);
     }
@@ -264,6 +272,28 @@ export default function App() {
           setOrcamentos(configData.orcamentos);
         }
       }
+
+      const { data: saldosData } = await supabase
+        .from('saldos_fim_mes')
+        .select('*')
+        .eq('conta_id', contaAtiva);
+
+      if (saldosData) {
+        const saldosFormatados: SaldoFinalBancoMes[] = saldosData.map((row: any) => ({
+          id: String(row.id),
+          conta_id: String(row.conta_id),
+          mes: String(row.mes),
+          banco: String(row.banco),
+          responsavel: String(row.responsavel),
+          dataUltimoDia: String(row.data_ultimo_dia),
+          saldoFinal: Number(row.saldo_final),
+        }));
+        setSaldosFimMes(saldosFormatados);
+        localStorage.setItem(
+          `financas_saldos_fim_mes_v2_${contaAtiva}`,
+          JSON.stringify(saldosFormatados)
+        );
+      }
     } catch {
       setErroNuvem('Sem conexão no momento. Seus dados estão salvos no aparelho.');
     } finally {
@@ -287,6 +317,9 @@ export default function App() {
         carregarDadosNuvem();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'config_casal' }, () => {
+        carregarDadosNuvem();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'saldos_fim_mes' }, () => {
         carregarDadosNuvem();
       })
       .subscribe();
@@ -338,6 +371,12 @@ export default function App() {
       .filter((t) => filtroPessoaGlobal === 'Todos' || t.responsavel === filtroPessoaGlobal)
       .sort((a, b) => b.data.localeCompare(a.data));
   }, [transacoes, mesSelecionado, filtroPessoaGlobal]);
+
+  const saldosFimMesAtual = useMemo(() => {
+    return saldosFimMes
+      .filter((s) => s.mes === mesSelecionado)
+      .filter((s) => filtroPessoaGlobal === 'Todos' || s.responsavel === filtroPessoaGlobal);
+  }, [saldosFimMes, mesSelecionado, filtroPessoaGlobal]);
 
   const resumoMes = useMemo(() => {
     let receitas = 0;
@@ -1168,6 +1207,40 @@ export default function App() {
                       </p>
                     </div>
                   </div>
+
+                  {saldosFimMesAtual.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-zinc-800/70 flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <span className="text-zinc-400 flex items-center gap-1.5 font-medium">
+                        <Landmark size={14} className="text-emerald-400 shrink-0" />
+                        Saldo real nos bancos (fim do mês):
+                      </span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {saldosFimMesAtual.map((s) => (
+                          <span
+                            key={s.id}
+                            className="bg-zinc-950/80 border border-zinc-800 px-2.5 py-1 rounded-lg text-[11px]"
+                          >
+                            {s.banco} ({s.dataUltimoDia.slice(8, 10)}/{s.dataUltimoDia.slice(5, 7)}):{' '}
+                            <strong
+                              className={s.saldoFinal >= 0 ? 'text-emerald-400' : 'text-rose-400'}
+                            >
+                              {formatarMoeda(s.saldoFinal)}
+                            </strong>
+                          </span>
+                        ))}
+                        {saldosFimMesAtual.length > 1 && (
+                          <span className="text-[11px] text-zinc-300 font-bold pl-1">
+                            Total:{' '}
+                            <span className="text-white">
+                              {formatarMoeda(
+                                saldosFimMesAtual.reduce((acc, s) => acc + s.saldoFinal, 0)
+                              )}
+                            </span>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="lg:col-span-5 bg-zinc-900/60 border border-zinc-800/80 rounded-2xl p-5 flex flex-col justify-between space-y-4">
@@ -1314,6 +1387,7 @@ export default function App() {
                     transacoesMes={transacoesFiltradas}
                     orcamentos={orcamentos}
                     observacoesMes={observacoesMes}
+                    saldosFimMes={saldosFimMesAtual}
                   />
 
                   <button
@@ -1336,8 +1410,10 @@ export default function App() {
                     mesSelecionado={mesSelecionado}
                     pessoa1={pessoa1}
                     pessoa2={pessoa2}
+                    contaAtiva={contaAtiva}
                     transacoesExistentes={transacoes}
                     onImportarLancamentos={handleImportarExtratoBancario}
+                    onSaldosAtualizados={carregarDadosNuvem}
                   />
                 </div>
               </div>

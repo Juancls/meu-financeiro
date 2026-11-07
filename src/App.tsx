@@ -755,8 +755,9 @@ export default function App() {
 
   // --- AÇÕES DO ENXOVAL ---
   const handleSalvarItemEnxoval = async (item: EnxovalItem) => {
+    const jaExiste = itensEnxoval.some((i) => i.id === item.id);
     const idSeguro =
-      contaAtiva && !item.id.startsWith(`${contaAtiva}-`)
+      !jaExiste && contaAtiva && !item.id.startsWith(`${contaAtiva}-`)
         ? `${contaAtiva}-${item.id}`
         : item.id;
     const itemFinal = { ...item, id: idSeguro };
@@ -767,7 +768,7 @@ export default function App() {
     });
 
     if (supabase) {
-      await supabase.from('enxoval').upsert({
+      const { error } = await supabase.from('enxoval').upsert({
         id: itemFinal.id,
         comodo: itemFinal.comodo,
         item: itemFinal.item,
@@ -778,6 +779,21 @@ export default function App() {
         comprado: itemFinal.comprado,
         conta_id: contaAtiva,
       });
+      if (error) {
+        // Caso a coluna id no banco não aceite prefixo texto ou ocorra conflito, tenta atualizar pelo id original
+        await supabase
+          .from('enxoval')
+          .update({
+            comodo: itemFinal.comodo,
+            item: itemFinal.item,
+            quantidade: itemFinal.quantidade,
+            valor: itemFinal.valor,
+            prioridade: itemFinal.prioridade,
+            observacao: itemFinal.observacao,
+            comprado: itemFinal.comprado,
+          })
+          .eq('id', item.id);
+      }
     }
   };
 
@@ -795,8 +811,9 @@ export default function App() {
 
   // --- AÇÕES DAS OBSERVAÇÕES DO MÊS ---
   const handleSalvarObservacao = async (obs: ObservacaoMes) => {
+    const jaExiste = observacoesMes.some((o) => o.id === obs.id);
     const idSeguro =
-      contaAtiva && !obs.id.startsWith(`${contaAtiva}-`)
+      !jaExiste && contaAtiva && !obs.id.startsWith(`${contaAtiva}-`)
         ? `${contaAtiva}-${obs.id}`
         : obs.id;
     const obsFinal = { ...obs, id: idSeguro };

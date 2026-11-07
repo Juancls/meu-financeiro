@@ -226,35 +226,141 @@ export function ImportadorExtratoBancario({
     return d || desc.trim();
   };
 
-  // Classificador inteligente calibrado para Itaú e Banco Inter
-  const classificarDescricao = (
-    desc: string,
-    sinal: 'entrada' | 'saida'
-  ): { tipo: TransactionType; categoria: string; metodo: PaymentMethod; motivo?: string } => {
-    const t = normalizar(desc);
+  // Extrai automaticamente o Nome Completo do Titular da conta no cabeçalho do PDF (Inter / Itaú / outros)
+  const extrairTitularDoExtrato = (texto: string): string | null => {
+    const linhas = texto
+      .split(/\r?\n/)
+      .map((l) => l.replace(/\u00a0/g, ' ').trim())
+      .filter(Boolean);
 
-    const p1Norm = normalizar(pessoa1);
-    const p2Norm = normalizar(pessoa2);
+    for (let i = 0; i < Math.min(linhas.length, 25); i++) {
+      const linha = linhas[i];
 
-    // Inclui abreviações de 7 letras do Itaú (ex: "JUAN CE20/10" ou "Juan Ce09/10")
-    const nomesProprios = [
-      p1Norm,
-      p2Norm,
-      'juan cecilio',
-      'juan ce',
+      // Padrão Itaú: "itau JUAN CECILIO DE LIMA SILVA 503.561.728-99 agência: 3613..."
+      const mItau = linha.match(
+        /(?:^|\bita[uú]\s+)([A-ZÀ-Ú][A-ZÀ-Ú\s]{5,}?)\s+\d{3}\.\d{3}\.\d{3}-\d{2}/i
+      );
+      if (mItau && mItau[1]) {
+        const candidato = mItau[1].replace(/^ita[uú]\s+/i, '').trim();
+        if (candidato.split(/\s+/).length >= 2) return candidato;
+      }
+
+      // Padrão Banco Inter: linha com nome completo logo acima de "CPF/CNPJ: 503.561.728-99"
+      if (/cpf\s*\/\s*cnpj\s*:/i.test(linha) && i > 0) {
+        for (let k = i - 1; k >= Math.max(0, i - 3); k--) {
+          const ant = linhas[k]
+            .replace(/solicitado em.*$/i, '')
+            .replace(/^inter\s+/i, '')
+            .trim();
+          if (
+            ant.length >= 6 &&
+            ant.split(/\s+/).length >= 2 &&
+            !/\d/.test(ant) &&
+            !normalizar(ant).includes('solicitado') &&
+            !normalizar(ant).includes('extrato')
+          ) {
+            return ant;
+          }
+        }
+      }
+    }
+
+    return null;
+  };
+
+  // Gera as assinaturas de MESMA TITULARIDADE apenas do dono daquele extrato específico
+  // (incluindo nome completo, 2 primeiros nomes e abreviação de 7 letras do Itaú, ex: "juan ce" ou "ana kar")
+  const obterAssinaturasMesmaTitularidade = (
+    titularExtrato: string | null,
+    responsavelRef: string
+  ): string[] => {
+    const assinaturas = new Set<string>([
       'mesma titularidade',
       'entre contas',
       'transf entre contas',
       'transferencia propria',
-    ].filter((n) => n.length >= 3);
+    ]);
+
+    const adicionarVariantesDeNome = (nomeCompleto: string) => {
+      const norm = normalizar(nomeCompleto).replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (!norm || norm.length < 4) return;
+      assinaturas.add(norm);
+
+      // Abreviação padrão de 7 caracteres do Itaú (ex: "JUAN CE" em "PIX TRANSF JUAN CE20/10" ou "ANA KAR" em "PIX TRANSF ANA KAR20/10")
+      if (norm.length >= 7) {
+        assinaturas.add(norm.slice(0, 7).trim());
+      }
+
+      const partes = norm.split(' ').filter((p) => p.length >= 2);
+      if (partes.length >= 2) {
+        assinaturas.add(`${partes[0]} ${partes[1]}`);
+      }
+    };
+
+    if (titularExtrato) {
+      adicionarVariantesDeNome(titularExtrato);
+    } else {
+      const respNorm = normalizar(responsavelRef);
+      const p1Norm = normalizar(pessoa1);
+      const p2Norm = normalizar(pessoa2);
+
+      if (respNorm === p1Norm || respNorm.includes('juan')) {
+        adicionarVariantesDeNome('Juan Cecilio de Lima Silva');
+        if (p1Norm.length >= 4 && p1Norm !== 'casal') adicionarVariantesDeNome(pessoa1);
+      } else if (respNorm === p2Norm || respNorm.includes('noiva') || respNorm.includes('ana')) {
+        adicionarVariantesDeNome('Ana Karolina de Oliveira');
+        if (p2Norm.length >= 4 && p2Norm !== 'noiva' && p2Norm !== 'casal') {
+          adicionarVariantesDeNome(pessoa2);
+        }
+      } else if (respNorm.length >= 4 && respNorm !== 'casal') {
+        adicionarVariantesDeNome(responsavelRef);
+      }
+    }
+
+    return Array.from(assinaturas).filter((s) => s.length >= 5);
+  };
+
+  // Identifica se o titular extraído do PDF corresponde à pessoa1 ou pessoa2
+  const resolverResponsavelPeloTitular = (
+    titularExtrato: string | null,
+    padrao: string
+  ): string => {
+    if (!titularExtrato) return padrao;
+    const tNorm = normalizar(titularExtrato);
+    const p1Norm = normalizar(pessoa1);
+    const p2Norm = normalizar(pessoa2);
+
+    if (p1Norm.length >= 3 && tNorm.includes(p1Norm)) return pessoa1;
+    if (p2Norm.length >= 3 && p2Norm !== 'noiva' && tNorm.includes(p2Norm)) return pessoa2;
+    if (tNorm.includes('juan')) return pessoa1;
+    if (tNorm.includes('ana karolina') || tNorm.includes('vitoria')) {
+      return p1Norm.includes('vitoria') ? pessoa1 : pessoa2;
+    }
+    return padrao;
+  };
+
+  // Classificador inteligente calibrado para Itaú e Banco Inter (respeitando a titularidade do extrato)
+  const classificarDescricao = (
+    desc: string,
+    sinal: 'entrada' | 'saida',
+    assinaturasTitular: string[]
+  ): { tipo: TransactionType; categoria: string; metodo: PaymentMethod; motivo?: string } => {
+    const t = normalizar(desc);
+
+    // Verifica se é transferência para o PRÓPRIO titular do extrato (mesma titularidade)
+    const ehContextoTransferencia =
+      t.includes('pix') ||
+      t.includes('ted') ||
+      t.includes('doc') ||
+      t.includes('transf') ||
+      t.includes('receb') ||
+      t.includes('enviad') ||
+      t.includes('entre contas') ||
+      t.includes('mesma titularidade');
 
     if (
-      nomesProprios.some((nome) => t.includes(nome)) &&
-      (t.includes('pix') ||
-        t.includes('ted') ||
-        t.includes('transf') ||
-        t.includes('receb') ||
-        t.includes('enviad'))
+      ehContextoTransferencia &&
+      assinaturasTitular.some((assinatura) => t.includes(assinatura))
     ) {
       return {
         tipo: 'transferencia_interna',
@@ -430,7 +536,7 @@ export function ImportadorExtratoBancario({
     return { tipo: 'despesa', categoria, metodo };
   };
 
-  // Cruzamento de pares de transferência entre contas no mesmo dia (ou 1 dia de diferença)
+  // Cruzamento seguro de pares de transferência de MESMA TITULARIDADE entre bancos diferentes
   const cruzarTransferenciasInternas = (lista: ItemPreview[]): ItemPreview[] => {
     const resultado = [...lista];
 
@@ -440,16 +546,46 @@ export function ImportadorExtratoBancario({
       return Math.abs(Math.round((t1 - t2) / (1000 * 60 * 60 * 24)));
     };
 
+    const pareceTransferenciaBancaria = (desc: string) => {
+      const n = normalizar(desc);
+      if (
+        n.includes('saque') ||
+        n.includes('compra') ||
+        n.includes('pay ') ||
+        n.includes('pix qrs') ||
+        n.includes('boleto') ||
+        n.includes('fatura') ||
+        n.includes('salario') ||
+        n.includes('remuneracao')
+      ) {
+        return false;
+      }
+      return n.includes('pix') || n.includes('ted') || n.includes('transf');
+    };
+
     for (let i = 0; i < resultado.length; i++) {
       const itemA = resultado[i];
       if (itemA.sinalOriginal !== 'saida') continue;
       if (itemA.tipo === 'poupanca' || itemA.tipo === 'resgate_poupanca') continue;
+      if (!pareceTransferenciaBancaria(itemA.local)) continue;
 
       for (let j = 0; j < resultado.length; j++) {
         if (i === j) continue;
         const itemB = resultado[j];
         if (itemB.sinalOriginal !== 'entrada') continue;
         if (itemB.tipo === 'poupanca' || itemB.tipo === 'resgate_poupanca') continue;
+        if (!pareceTransferenciaBancaria(itemB.local)) continue;
+
+        // NUNCA cruza lançamentos de titulares/responsáveis diferentes (ex: Juan enviando para Noiva)
+        if (itemA.responsavel !== itemB.responsavel) continue;
+        // Só cruza se vierem de bancos/arquivos diferentes E pelo menos um deles já indicar mesma titularidade
+        if (itemA.origemArquivo === itemB.origemArquivo) continue;
+        if (
+          itemA.tipo !== 'transferencia_interna' &&
+          itemB.tipo !== 'transferencia_interna'
+        ) {
+          continue;
+        }
 
         const mesmoValor = Math.abs(itemA.valor - itemB.valor) < 0.005;
         if (!mesmoValor) continue;
@@ -460,13 +596,13 @@ export function ImportadorExtratoBancario({
             ...itemA,
             tipo: 'transferencia_interna',
             categoria: 'Transferência entre Contas',
-            motivoAuto: 'Par de transferência entre contas detectado',
+            motivoAuto: 'Par de transferência de mesma titularidade entre contas',
           };
           resultado[j] = {
             ...itemB,
             tipo: 'transferencia_interna',
             categoria: 'Transferência entre Contas',
-            motivoAuto: 'Par de transferência entre contas detectado',
+            motivoAuto: 'Par de transferência de mesma titularidade entre contas',
           };
           break;
         }
@@ -545,22 +681,10 @@ export function ImportadorExtratoBancario({
       return { dataISO: `${mISO[1]}-${mISO[2]}-${mISO[3]}`, horario };
     }
 
-    // 4. DD/MM/YY
-    const mCurtoAno = str.match(/(\d{2})\/(\d{2})\/(\d{2})(?!\d)/);
+    // 4. DD/MM/YY apenas no início da string
+    const mCurtoAno = str.match(/^(\d{2})\/(\d{2})\/(\d{2})(?!\d)/);
     if (mCurtoAno) {
       return { dataISO: `20${mCurtoAno[3]}-${mCurtoAno[2]}-${mCurtoAno[1]}`, horario };
-    }
-
-    // 5. DD/mmm
-    const mMesTexto = norm.match(
-      /(?:^|\s)(\d{1,2})\s*[/\s-]\s*(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)(?:\b|\s|$)/
-    );
-    if (mMesTexto) {
-      const anoAlvo = mesAlvo.split('-')[0];
-      const mesNum = MESES_PT[mMesTexto[2]];
-      if (mesNum) {
-        return { dataISO: `${anoAlvo}-${mesNum}-${mMesTexto[1].padStart(2, '0')}`, horario };
-      }
     }
 
     return { dataISO: null };
@@ -571,6 +695,7 @@ export function ImportadorExtratoBancario({
     if (typeof val === 'number') return isNaN(val) ? null : Number(val.toFixed(2));
 
     let s = String(val)
+      .replace(/[\u2212\u2013\u2014]/g, '-')
       .replace(/R\$/gi, '')
       .replace(/\u00a0/g, '')
       .replace(/\s/g, '')
@@ -597,7 +722,7 @@ export function ImportadorExtratoBancario({
   };
 
   // ============================================================================
-  // LEITOR DE PDF (RECONSTRÓI CADA LINHA HORIZONTAL DO EXTRATO DO INTER E ITAÚ)
+  // LEITOR DE PDF (RECONSTRÓI CADA LINHA HORIZONTAL PRESERVANDO NÚMEROS QUEBRADOS)
   // ============================================================================
   const extrairTextoDePDF = async (file: File): Promise<string> => {
     const arrayBuffer = await file.arrayBuffer();
@@ -608,27 +733,64 @@ export function ImportadorExtratoBancario({
       const page = await pdf.getPage(pageNum);
       const textContent = await page.getTextContent();
 
-      const gruposY: { y: number; itens: { x: number; str: string }[] }[] = [];
+      const gruposY: {
+        yMedio: number;
+        itens: { x: number; width: number; str: string }[];
+      }[] = [];
 
       for (const item of textContent.items as any[]) {
-        const texto = String(item.str || '').replace(/\u00a0/g, ' ').trim();
+        const texto = String(item.str || '')
+          .replace(/\u00a0/g, ' ')
+          .replace(/[\u2212\u2013\u2014]/g, '-')
+          .trim();
         if (!texto) continue;
-        const x = item.transform[4];
-        const y = item.transform[5];
+        const x = Number(item.transform[4]) || 0;
+        const y = Number(item.transform[5]) || 0;
+        const width = Number(item.width) || 0;
 
-        let grupo = gruposY.find((g) => Math.abs(g.y - y) <= 3.5);
+        let grupo = gruposY.find((g) => Math.abs(g.yMedio - y) <= 3.5);
         if (!grupo) {
-          grupo = { y, itens: [] };
+          grupo = { yMedio: y, itens: [] };
           gruposY.push(grupo);
+        } else {
+          grupo.yMedio =
+            (grupo.yMedio * grupo.itens.length + y) / (grupo.itens.length + 1);
         }
-        grupo.itens.push({ x, str: texto });
+        grupo.itens.push({ x, width, str: texto });
       }
 
-      gruposY.sort((a, b) => b.y - a.y);
+      gruposY.sort((a, b) => b.yMedio - a.yMedio);
 
       for (const g of gruposY) {
         g.itens.sort((a, b) => a.x - b.x);
-        const linhaMontada = g.itens.map((i) => i.str).join(' ');
+        let linhaMontada = '';
+        for (let k = 0; k < g.itens.length; k++) {
+          const atual = g.itens[k];
+          if (k === 0) {
+            linhaMontada = atual.str;
+            continue;
+          }
+          const ant = g.itens[k - 1];
+          const gap = atual.x - (ant.x + ant.width);
+
+          // Evita inserir espaço no meio de um número quebrado pelo PDF (ex: "-1" + "07,91" ou "1." + "247,00")
+          const continuacaoNumerica =
+            gap < 6 &&
+            ((/[-+R$.\d,]$/i.test(ant.str) && /^[.\d,]/.test(atual.str)) ||
+              (/\d$/.test(ant.str) && /^,\d{2}\b/.test(atual.str)));
+
+          if (gap < 2.2 || continuacaoNumerica) {
+            linhaMontada += atual.str;
+          } else {
+            linhaMontada += ` ${atual.str}`;
+          }
+        }
+        // Recompõe números caso o PDF tenha deixado espaço interno após ponto de milhar ou vírgula
+        linhaMontada = linhaMontada
+          .replace(/(\d)\.\s+(\d{3}\b)/g, '$1.$2')
+          .replace(/(\d),\s+(\d{2}\b)/g, '$1,$2')
+          .replace(/(-)\s+(R\$)/gi, '$1$2');
+
         linhasTotais.push(linhaMontada);
       }
     }
@@ -651,53 +813,188 @@ export function ImportadorExtratoBancario({
     let ignorados = 0;
 
     const textoNorm = normalizar(texto);
-    const nomeBanco = textoNorm.includes('banco inter')
+    const ehBancoInter =
+      textoNorm.includes('banco inter') ||
+      textoNorm.includes('saldo por transacao') ||
+      textoNorm.includes('cdb porq obj');
+    const ehItau =
+      !ehBancoInter &&
+      (textoNorm.includes('itau') ||
+        textoNorm.includes('extrato conta / lancamentos') ||
+        textoNorm.includes('limite da conta disponivel'));
+
+    const nomeBanco = ehBancoInter
       ? 'Banco Inter'
-      : textoNorm.includes('itau')
+      : ehItau
       ? 'Itaú'
       : origemLabel.replace(/\.(pdf|csv|ofx|txt|xlsx)$/i, '');
 
+    // Detecta automaticamente quem é o titular deste extrato pelo cabeçalho do PDF
+    const titularExtrato = extrairTitularDoExtrato(texto);
+    const responsavelArquivo = resolverResponsavelPeloTitular(
+      titularExtrato,
+      responsavelPadrao
+    );
+    const assinaturasTitular = obterAssinaturasMesmaTitularidade(
+      titularExtrato,
+      responsavelArquivo
+    );
+
     const saldosDiariosDoMes: { data: string; saldo: number }[] = [];
 
-    // Regex que captura "-R$ 2,29", "R$ 195,45", "-12,80" sem roubar o "-" da coluna seguinte
-    const regexValores =
-      /[-+]?\s*(?:R\$\s*)?[-+]?\s*\d{1,3}(?:\.\d{3})*[.,]\d{2}(?:-(?!\s*(?:R\$|\d)))?/gi;
+    // Regex estrita para valores monetários brasileiros: exige vírgula seguida de exatos 2 dígitos (nunca casa CPF 503.561.728-99 nem Resolução 4.292/13)
+    const regexValoresBR =
+      /(?:[-+]\s*(?:R\$\s*)?|(?:R\$\s*)[-+]\s*|R\$\s*|\b)\d{1,3}(?:\.\d{3})*,\d{2}(?!\d)/gi;
 
     const linhas = texto.split(/\r?\n/);
     let ultimaDataDetectada: string | null = null;
+    let dentroRodapeLegalItau = false;
 
     for (let idx = 0; idx < linhas.length; idx++) {
-      const limpa = linhas[idx].replace(/\u00a0/g, ' ').trim();
+      const limpa = linhas[idx]
+        .replace(/\u00a0/g, ' ')
+        .replace(/[\u2212\u2013\u2014]/g, '-')
+        .trim();
       if (!limpa || limpa.length < 4) continue;
 
       const normLinha = normalizar(limpa);
 
-      // 1. Ignora cabeçalhos de emissão/período/rodapé para NUNCA sujar a data dos lançamentos
+      // No Itaú, tudo após "Aviso!" ou "Os saldos acima são baseados" é texto jurídico de rodapé (Página 3)
+      if (
+        ehItau &&
+        (normLinha === 'aviso!' ||
+          normLinha.startsWith('os saldos acima sao baseados') ||
+          normLinha.includes('conforme resolucao'))
+      ) {
+        dentroRodapeLegalItau = true;
+      }
+      if (dentroRodapeLegalItau) continue;
+
+      // 1. Ignora cabeçalhos de emissão/período/resumo/rodapé para NUNCA criar lançamentos fantasmas
       if (
         normLinha.includes('solicitado em') ||
         normLinha.includes('periodo:') ||
+        normLinha.includes('periodo :') ||
         normLinha.includes('periodo de visualizacao') ||
         normLinha.includes('emitido em') ||
         normLinha.includes('cpf/cnpj') ||
+        /\d{3}\.\d{3}\.\d{3}-\d{2}/.test(limpa) ||
+        normLinha.includes('agencia:') ||
         normLinha.includes('fale com a gente') ||
         normLinha.includes('sac:') ||
         normLinha.includes('ouvidoria:') ||
+        normLinha.includes('deficiencia de fala') ||
         normLinha.includes('limite da conta') ||
+        normLinha.includes('total contratado') ||
         normLinha.includes('saldo total') ||
         normLinha.includes('saldo disponivel') ||
         normLinha.includes('saldo bloqueado') ||
-        normLinha.includes('saldo em conta')
+        normLinha.includes('bloqueado + disponivel') ||
+        normLinha.includes('saldo em conta') ||
+        normLinha.includes('extrato conta / lancamentos') ||
+        (normLinha.includes('lancamentos') && normLinha.includes('valor (r$)'))
       ) {
         continue;
       }
 
-      // 2. Verifica se a linha tem data explícita (DD/MM/YYYY do Itaú ou "5 de Outubro de 2026" do Inter)
-      const { dataISO, horario } = extrairDataISO(limpa);
-      if (dataISO) {
-        ultimaDataDetectada = dataISO;
+      // ======================================================================
+      // MODO 1: EXTRATO ITAÚ (Toda linha válida da tabela começa com DD/MM/YYYY)
+      // ======================================================================
+      if (ehItau) {
+        const mLinhaItau = limpa.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(.+)$/);
+        if (!mLinhaItau) {
+          // Linhas sem DD/MM/YYYY no início (como o quadro de resumo R$ -12,61 R$ 12,61... ou avisos) são ignoradas!
+          continue;
+        }
+
+        const dataLinha = `${mLinhaItau[3]}-${mLinhaItau[2]}-${mLinhaItau[1]}`;
+        const conteudoLinha = mLinhaItau[4].trim();
+        const normConteudo = normalizar(conteudoLinha);
+
+        // Linha de SALDO DO DIA no Itaú
+        if (
+          normConteudo.includes('saldo do dia') ||
+          normConteudo.includes('saldo anterior') ||
+          normConteudo.includes('saldo final') ||
+          normConteudo.includes('s a l d o')
+        ) {
+          if (dataLinha.startsWith(mesAlvo) && normConteudo.includes('saldo do dia')) {
+            const matchesSaldo = Array.from(conteudoLinha.matchAll(regexValoresBR));
+            if (matchesSaldo.length > 0) {
+              const valorSaldo = extrairNumero(matchesSaldo[matchesSaldo.length - 1][0]);
+              if (valorSaldo !== null) {
+                saldosDiariosDoMes.push({ data: dataLinha, saldo: valorSaldo });
+              }
+            }
+          }
+          continue;
+        }
+
+        // Lançamento normal do Itaú: o valor está sempre no FINAL da linha
+        const matchesValores = Array.from(conteudoLinha.matchAll(regexValoresBR));
+        if (matchesValores.length === 0) continue;
+
+        const ultimoMatch = matchesValores[matchesValores.length - 1];
+        const valorNum = extrairNumero(ultimoMatch[0]);
+        if (valorNum === null || valorNum === 0) continue;
+
+        const rawDesc = conteudoLinha.slice(0, ultimoMatch.index).trim();
+        const desc = limparDescricaoBancaria(
+          rawDesc.replace(/^[;\t|\s-]+|[;\t|\s-]+$/g, '').trim()
+        );
+        if (!desc || desc.length < 2) continue;
+
+        if (!dataLinha.startsWith(mesAlvo)) {
+          ignorados++;
+          continue;
+        }
+
+        const sinal: 'entrada' | 'saida' = valorNum > 0 ? 'entrada' : 'saida';
+        const classif = classificarDescricao(desc, sinal, assinaturasTitular);
+
+        validos.push({
+          idTemp: `${Date.now()}-${origemLabel}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+          selecionado: true,
+          data: dataLinha,
+          local: desc,
+          valor: Math.abs(valorNum),
+          sinalOriginal: sinal,
+          tipo: classif.tipo,
+          categoria: classif.categoria,
+          responsavel: responsavelArquivo,
+          metodoPagamento: classif.metodo,
+          origemArquivo: nomeBanco,
+          motivoAuto: classif.motivo,
+        });
+        continue;
       }
 
-      // 3. Se for uma linha de SALDO DO DIA (Inter ou Itaú), NUNCA adiciona como entrada/saída!
+      // ======================================================================
+      // MODO 2: EXTRATO BANCO INTER E DEMAIS BANCOS
+      // ======================================================================
+      // No Banco Inter, a data só muda nos cabeçalhos por extenso ("5 de Outubro de 2026")
+      let dataISO: string | null = null;
+      let horario: string | undefined;
+
+      if (ehBancoInter) {
+        const mExtenso = normLinha.match(
+          /(?:^|\s|\D)(\d{1,2})\s+de\s+(janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s+de\s+(\d{4})/
+        );
+        if (mExtenso) {
+          const dia = mExtenso[1].padStart(2, '0');
+          const mes = MESES_PT[mExtenso[2]];
+          const ano = mExtenso[3];
+          dataISO = `${ano}-${mes}-${dia}`;
+          ultimaDataDetectada = dataISO;
+        }
+      } else {
+        const extraida = extrairDataISO(limpa);
+        dataISO = extraida.dataISO;
+        horario = extraida.horario;
+        if (dataISO) ultimaDataDetectada = dataISO;
+      }
+
+      // Se for linha de SALDO DO DIA (ex: "5 de Outubro de 2026 Saldo do dia: R$ 1,83")
       if (
         normLinha.includes('saldo do dia') ||
         normLinha.includes('saldo anterior') ||
@@ -708,14 +1005,19 @@ export function ImportadorExtratoBancario({
         if (dataRefSaldo && dataRefSaldo.startsWith(mesAlvo) && normLinha.includes('saldo do dia')) {
           const posSaldo = normLinha.indexOf('saldo do dia');
           const trechoAposSaldo = limpa.slice(posSaldo);
-          const matchesSaldo = Array.from(trechoAposSaldo.matchAll(regexValores));
+          const matchesSaldo = Array.from(trechoAposSaldo.matchAll(regexValoresBR));
           if (matchesSaldo.length > 0) {
-            const valorSaldo = extrairNumero(matchesSaldo[matchesSaldo.length - 1][0]);
+            const valorSaldo = extrairNumero(matchesSaldo[0][0]);
             if (valorSaldo !== null) {
               saldosDiariosDoMes.push({ data: dataRefSaldo, saldo: valorSaldo });
             }
           }
         }
+        continue;
+      }
+
+      // Se a linha é apenas um cabeçalho de data por extenso sem lançamento, pula
+      if (ehBancoInter && dataISO) {
         continue;
       }
 
@@ -728,19 +1030,29 @@ export function ImportadorExtratoBancario({
         restoLinha = restoLinha.slice(mDataInicio[0].length).trim();
       }
 
-      const matchesValores = Array.from(restoLinha.matchAll(regexValores));
+      // No Banco Inter, toda coluna de Valor/Saldo tem "R$". Se a linha tem 2 valores no final ([Valor] [Saldo por transação]),
+      // pegamos o penúltimo (coluna Valor) e descartamos o último (coluna Saldo por transação).
+      const regexBusca = ehBancoInter
+        ? /[-+]?\s*R\$\s*[-+]?\s*\d{1,3}(?:\.\d{3})*,\d{2}(?!\d)/gi
+        : regexValoresBR;
+
+      const matchesValores = Array.from(restoLinha.matchAll(regexBusca));
       if (matchesValores.length === 0) continue;
 
-      const primeiroMatch = matchesValores[0];
-      let valorNum = extrairNumero(primeiroMatch[0]);
+      const matchValorTransacao =
+        ehBancoInter && matchesValores.length >= 2
+          ? matchesValores[matchesValores.length - 2]
+          : matchesValores[0];
+
+      let valorNum = extrairNumero(matchValorTransacao[0]);
       if (valorNum === null || valorNum === 0) continue;
 
-      const rawDesc = restoLinha.slice(0, primeiroMatch.index).trim();
+      const rawDesc = restoLinha.slice(0, matchValorTransacao.index).trim();
       const desc = limparDescricaoBancaria(
         rawDesc.replace(/^[;\t|\s-]+|[;\t|\s-]+$/g, '').trim()
       );
 
-      if (!desc || desc.length < 2) continue;
+      if (!desc || desc.length < 2 || /^r\$\s*\d/i.test(desc)) continue;
 
       if (!dataUsada.startsWith(mesAlvo)) {
         ignorados++;
@@ -765,7 +1077,7 @@ export function ImportadorExtratoBancario({
       }
 
       const sinal: 'entrada' | 'saida' = valorNum > 0 ? 'entrada' : 'saida';
-      const classif = classificarDescricao(desc, sinal);
+      const classif = classificarDescricao(desc, sinal, assinaturasTitular);
 
       validos.push({
         idTemp: `${Date.now()}-${origemLabel}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
@@ -777,7 +1089,7 @@ export function ImportadorExtratoBancario({
         sinalOriginal: sinal,
         tipo: classif.tipo,
         categoria: classif.categoria,
-        responsavel: responsavelPadrao,
+        responsavel: responsavelArquivo,
         metodoPagamento: classif.metodo,
         origemArquivo: nomeBanco,
         motivoAuto: classif.motivo,
@@ -790,13 +1102,13 @@ export function ImportadorExtratoBancario({
       saldosDiariosDoMes.sort((a, b) => a.data.localeCompare(b.data));
       const ultimo = saldosDiariosDoMes[saldosDiariosDoMes.length - 1];
       ultimoSaldoMes = {
-        id: `${contaIdAtual}-${mesAlvo}-${normalizar(nomeBanco)}-${normalizar(responsavelPadrao)}`,
+        id: `${contaIdAtual}-${mesAlvo}-${normalizar(nomeBanco)}-${normalizar(responsavelArquivo)}`,
         conta_id: contaIdAtual,
         mes: mesAlvo,
         banco: nomeBanco,
         dataUltimoDia: ultimo.data,
         saldoFinal: ultimo.saldo,
-        responsavel: responsavelPadrao,
+        responsavel: responsavelArquivo,
       };
     }
 
@@ -839,7 +1151,8 @@ export function ImportadorExtratoBancario({
       const desc = (memoMatch?.[1] || nameMatch?.[1] || 'Lançamento Bancário').trim();
       const sinal: 'entrada' | 'saida' = valorBruto > 0 ? 'entrada' : 'saida';
       const valorAbs = Math.abs(valorBruto);
-      const classif = classificarDescricao(desc, sinal);
+      const assinaturasPadrao = obterAssinaturasMesmaTitularidade(null, responsavelPadrao);
+      const classif = classificarDescricao(desc, sinal, assinaturasPadrao);
 
       validos.push({
         idTemp: `${Date.now()}-${nomeArq}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
@@ -929,7 +1242,8 @@ export function ImportadorExtratoBancario({
 
         const sinal: 'entrada' | 'saida' = valorEncontrado > 0 ? 'entrada' : 'saida';
         const valorAbs = Math.abs(valorEncontrado);
-        const classif = classificarDescricao(descFinal, sinal);
+        const assinaturasPadrao = obterAssinaturasMesmaTitularidade(null, responsavelPadrao);
+        const classif = classificarDescricao(descFinal, sinal, assinaturasPadrao);
 
         validos.push({
           idTemp: `${Date.now()}-${nomeArq}-${idx}-${Math.random().toString(36).slice(2, 6)}`,

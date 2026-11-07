@@ -292,17 +292,30 @@ export function AbaEnxoval({
           {itensFiltrados.map((item) => (
             <div
               key={item.id}
-              className={`border rounded-xl p-3.5 md:p-4 flex items-start justify-between gap-3 transition ${
+              onClick={() => onAlternarComprado(item)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onAlternarComprado(item);
+                }
+              }}
+              className={`border rounded-xl p-3.5 md:p-4 flex items-start justify-between gap-3 transition cursor-pointer select-none ${
                 item.comprado
-                  ? 'bg-emerald-950/15 border-emerald-900/40'
-                  : 'bg-zinc-900/70 border-zinc-800/80 hover:border-zinc-700'
+                  ? 'bg-emerald-950/15 border-emerald-900/40 hover:border-emerald-500/50'
+                  : 'bg-zinc-900/70 border-zinc-800/80 hover:border-emerald-500/40'
               }`}
             >
-              <div className="flex items-start gap-3 min-w-0">
+              <div className="flex items-start gap-3 min-w-0 flex-1">
                 <button
-                  onClick={() => onAlternarComprado(item)}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onAlternarComprado(item);
+                  }}
                   className={`mt-0.5 shrink-0 transition cursor-pointer ${
-                    item.comprado ? 'text-emerald-400' : 'text-zinc-500 hover:text-zinc-300'
+                    item.comprado ? 'text-emerald-400' : 'text-zinc-500 hover:text-emerald-400'
                   }`}
                   title={item.comprado ? 'Marcar como pendente' : 'Marcar como já comprado'}
                 >
@@ -349,19 +362,26 @@ export function AbaEnxoval({
                 </div>
               </div>
 
-              <div className="flex flex-col items-end shrink-0">
-                <span
-                  className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
+              <div
+                className="flex flex-col items-end shrink-0"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  onClick={() => onAlternarComprado(item)}
+                  className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full transition cursor-pointer ${
                     item.comprado
-                      ? 'bg-emerald-500/20 text-emerald-300'
-                      : 'bg-zinc-800 text-zinc-400'
+                      ? 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
+                      : 'bg-zinc-800 text-zinc-400 hover:bg-emerald-500/20 hover:text-emerald-300'
                   }`}
+                  title={item.comprado ? 'Clique para marcar como falta comprar' : 'Clique para marcar que já temos'}
                 >
-                  {item.comprado ? 'Comprado' : 'Falta'}
-                </span>
+                  {item.comprado ? 'Já Temos ✓' : 'Falta'}
+                </button>
 
                 <div className="flex items-center gap-1 mt-2">
                   <button
+                    type="button"
                     onClick={() => abrirModalEditar(item)}
                     className="text-zinc-500 hover:text-emerald-400 p-1.5 rounded-lg hover:bg-zinc-800/60 transition cursor-pointer"
                     title="Editar item"
@@ -370,6 +390,7 @@ export function AbaEnxoval({
                   </button>
                   {idConfirmandoExclusao === item.id ? (
                     <button
+                      type="button"
                       onClick={() => onExcluirItem(item.id)}
                       className="text-[10px] font-bold bg-rose-500 text-white px-2 py-1 rounded-lg hover:bg-rose-400 transition cursor-pointer"
                     >
@@ -377,6 +398,7 @@ export function AbaEnxoval({
                     </button>
                   ) : (
                     <button
+                      type="button"
                       onClick={() => setIdConfirmandoExclusao(item.id)}
                       className="text-zinc-500 hover:text-rose-400 p-1.5 rounded-lg hover:bg-zinc-800/60 transition cursor-pointer"
                       title="Excluir item"
